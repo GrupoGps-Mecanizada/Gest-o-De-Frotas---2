@@ -1,0 +1,1463 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gestão De Frota</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel Standalone para JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide (standalone version) -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Custom scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 20px;
+        }
+
+        /* Animations */
+        @keyframes slide-in-right {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes fade-in {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        .animate-slide-in-right {
+            animation: slide-in-right 0.3s ease-out;
+        }
+
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const {
+            useState,
+            useEffect,
+            createContext,
+            useContext,
+            useCallback
+        } = React;
+
+        // Criar componentes de ícone usando Lucide
+        const Icon = ({ name, size = 24, className = "", ...props }) => {
+            return (
+                <i
+                    data-lucide={name}
+                    className={className}
+                    style={{ width: size, height: size }}
+                    {...props}
+                />
+            );
+        };
+
+        // Atalhos para ícones comuns
+        const Activity = (props) => <Icon name="activity" {...props} />;
+        const AlertTriangle = (props) => <Icon name="alert-triangle" {...props} />;
+        const AlertOctagon = (props) => <Icon name="alert-octagon" {...props} />;
+        const BarChart2 = (props) => <Icon name="bar-chart-2" {...props} />;
+        const BarChart3 = (props) => <Icon name="bar-chart-3" {...props} />;
+        const Bell = (props) => <Icon name="bell" {...props} />;
+        const BellRing = (props) => <Icon name="bell-ring" {...props} />;
+        const Calendar = (props) => <Icon name="calendar" {...props} />;
+        const CalendarDays = (props) => <Icon name="calendar-days" {...props} />;
+        const Clock = (props) => <Icon name="clock" {...props} />;
+        const Database = (props) => <Icon name="database" {...props} />;
+        const Filter = (props) => <Icon name="filter" {...props} />;
+        const History = (props) => <Icon name="history" {...props} />;
+        const LogOut = (props) => <Icon name="log-out" {...props} />;
+        const MapPin = (props) => <Icon name="map-pin" {...props} />;
+        const MonitorPlay = (props) => <Icon name="monitor-play" {...props} />;
+        const PieChart = (props) => <Icon name="pie-chart" {...props} />;
+        const Plus = (props) => <Icon name="plus" {...props} />;
+        const Power = (props) => <Icon name="power" {...props} />;
+        const RefreshCw = (props) => <Icon name="refresh-cw" {...props} />;
+        const Save = (props) => <Icon name="save" {...props} />;
+        const Search = (props) => <Icon name="search" {...props} />;
+        const Settings = (props) => <Icon name="settings" {...props} />;
+        const Trash2 = (props) => <Icon name="trash-2" {...props} />;
+        const Truck = (props) => <Icon name="truck" {...props} />;
+        const User = (props) => <Icon name="user" {...props} />;
+        const X = (props) => <Icon name="x" {...props} />;
+        const Zap = (props) => <Icon name="zap" {...props} />;
+
+        // ============================================
+        // CONSTANTS & UTILITIES
+        // ============================================
+
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbzorWuKmMEsT891QSZpqX6_KJ9MkYXQnOKGx7NzD2xlQk4a-Hd76a01rIqXd0Gm5aEWVw/exec';
+
+        const STATUS_COLORS = {
+            trabalhando: { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-500', icon: 'bg-emerald-500' },
+            parado: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-500', icon: 'bg-red-500' },
+            manutencao: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-500', icon: 'bg-amber-500' },
+            'sem-apropriacao': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' }
+        };
+
+        const STATUS_LABELS = {
+            trabalhando: 'Em Operação',
+            parado: 'Parado',
+            manutencao: 'Em Manutenção',
+            'sem-apropriacao': 'Sem Sinal'
+        };
+
+        const normalizeStatus = (rawStatus) => {
+            const s = rawStatus?.toLowerCase() || '';
+            if (s.includes('trabalhando') || s.includes('ligado') || s.includes('operando')) return 'trabalhando';
+            if (s.includes('parado') || s.includes('desligado')) return 'parado';
+            if (s.includes('manutenção') || s.includes('manutencao')) return 'manutencao';
+            return 'sem-apropriacao';
+        };
+
+        const formatDateTime = (dateString) => {
+            if (!dateString) return '--:-- --/--/----';
+
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) {
+                    return dateString.replace('GMT-0300 (Horário Padrão de Brasília)', '').substring(0, 16);
+                }
+                const day = date.getDate().toString().padStart(2, '0');
+                const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                const year = date.getFullYear();
+                const hours = date.getHours().toString().padStart(2, '0');
+                const minutes = date.getMinutes().toString().padStart(2, '0');
+                return `${hours}:${minutes} ${day}/${month}/${year}`;
+            } catch (e) {
+                return dateString;
+            }
+        };
+
+        const timeToMinutes = (timeStr) => {
+            if (!timeStr || !timeStr.includes(':')) return 0;
+            const [hours, minutes] = timeStr.split(':').map(Number);
+            return (hours * 60) + (minutes || 0);
+        };
+
+        const calculateDuration = (startStr, endStr) => {
+            const startMins = timeToMinutes(startStr);
+            const endMins = timeToMinutes(endStr);
+
+            let diff = endMins - startMins;
+            if (diff < 0) diff += 1440;
+
+            const h = Math.floor(diff / 60);
+            const m = diff % 60;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+        };
+
+        // ============================================
+        // API SERVICE
+        // ============================================
+
+        const generateMockData = () => {
+            const baseStatus = ['Trabalhando', 'Parado', 'Manutenção', 'Sem Apropriação'];
+            const vagasNomes = [
+                'ALTA PRESSÃO - GPS - 01', 'ALTA PRESSÃO - GPS - 02', 'VAGA OPERACIONAL 03', 'INFRAESTRUTURA - 04',
+                'VAGA 05 - 24 HS', 'VAGA 06 - MANUTENÇÃO', 'ALTA PRESSÃO - GPS - 07', 'APOIO OPERACIONAL - 08'
+            ];
+
+            const vagas = Array.from({ length: 8 }).map((_, i) => {
+                const status = baseStatus[Math.floor(Math.random() * baseStatus.length)];
+                return {
+                    id: `eq-${i}`,
+                    nome: vagasNomes[i % vagasNomes.length],
+                    placa: `MOCK-${2024 + i}`,
+                    status: status,
+                    horario: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                    eventos: [
+                        { descricao: 'Operação Iniciada', dataInicio: '08:00', tempoTotal: '04:00', status: 'Trabalhando' },
+                        { descricao: 'Pausa para Almoço', dataInicio: '12:00', tempoTotal: '01:00', status: 'Parado' }
+                    ]
+                };
+            });
+            return { success: true, vagas };
+        };
+
+        const api = {
+            getVagas: async (date, hour) => {
+                try {
+                    const url = new URL(GAS_URL);
+                    url.searchParams.append('action', 'getVagas');
+                    url.searchParams.append('date', date);
+                    url.searchParams.append('ts', new Date().getTime().toString());
+
+                    if (hour) {
+                        url.searchParams.append('hour', hour);
+                    }
+
+                    const response = await fetch(url.toString(), { method: 'GET' });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP Error: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+
+                    if (!data || (data.success === false && !data.vagas)) {
+                        console.warn("API retornou erro, usando dados de demonstração.");
+                        return generateMockData();
+                    }
+
+                    const rawVagas = Array.isArray(data) ? data : (data.vagas || []);
+
+                    const mappedVagas = rawVagas.map((v, index) => ({
+                        id: v.id || `vaga-${index}`,
+                        nome: v.nome || `Vaga ${index + 1}`,
+                        placa: v.equipamento || v.placa || 'N/I',
+                        status: v.status || 'Sem Apropriação',
+                        horario: v.horario || new Date().toISOString(),
+                        eventos: Array.isArray(v.eventos) ? v.eventos : []
+                    }));
+
+                    return { success: true, vagas: mappedVagas };
+
+                } catch (error) {
+                    console.error("Erro de conexão com GAS:", error);
+                    return generateMockData();
+                }
+            },
+
+            saveRule: async (ruleData) => {
+                try {
+                    const response = await fetch(GAS_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({ action: 'saveRule', ...ruleData }),
+                        headers: { 'Content-Type': 'text/plain' }
+                    });
+                    return await response.json();
+                } catch (e) {
+                    console.error("Erro ao salvar regra", e);
+                    return { success: true };
+                }
+            }
+        };
+
+        // ============================================
+        // SOCKET SERVICE
+        // ============================================
+
+        class MockWebSocketService {
+            constructor() {
+                this.listeners = [];
+                this.intervalId = null;
+                this.isConnected = false;
+                this.mockEquipments = [];
+            }
+
+            connect(initialData) {
+                if (this.isConnected) return;
+
+                console.log('[WebSocket] Conectando ao servidor de telemetria...');
+                this.mockEquipments = initialData;
+                this.isConnected = true;
+
+                this.notify({ type: 'CONNECTION', payload: { status: 'connected' }, timestamp: Date.now() });
+                this.startSimulation();
+            }
+
+            disconnect() {
+                if (this.intervalId) clearInterval(this.intervalId);
+                this.isConnected = false;
+                this.notify({ type: 'CONNECTION', payload: { status: 'disconnected' }, timestamp: Date.now() });
+                console.log('[WebSocket] Desconectado.');
+            }
+
+            subscribe(listener) {
+                this.listeners.push(listener);
+                return () => {
+                    this.listeners = this.listeners.filter(l => l !== listener);
+                };
+            }
+
+            notify(message) {
+                this.listeners.forEach(listener => listener(message));
+            }
+
+            startSimulation() {
+                this.intervalId = setInterval(() => {
+                    if (!this.mockEquipments.length) return;
+
+                    const randomIndex = Math.floor(Math.random() * this.mockEquipments.length);
+                    const eq = this.mockEquipments[randomIndex];
+
+                    const statuses = ['Trabalhando', 'Parado', 'Manutenção'];
+                    const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
+
+                    if (eq.status === newStatus) return;
+
+                    const now = new Date();
+                    const timeString = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+                    let updatedEventos = [...eq.eventos];
+
+                    if (updatedEventos.length > 0) {
+                        const lastEventIndex = updatedEventos.length - 1;
+                        const lastEvent = { ...updatedEventos[lastEventIndex] };
+                        lastEvent.dataFim = timeString;
+
+                        if (lastEvent.dataInicio) {
+                            lastEvent.tempoTotal = calculateDuration(lastEvent.dataInicio, timeString);
+                        }
+
+                        updatedEventos[lastEventIndex] = lastEvent;
+                    }
+
+                    const newEvent = {
+                        descricao: `Mudança para ${newStatus}`,
+                        dataInicio: timeString,
+                        dataFim: undefined,
+                        tempoTotal: '00:00',
+                        status: newStatus
+                    };
+
+                    updatedEventos.push(newEvent);
+
+                    if (updatedEventos.length > 10) {
+                        updatedEventos = updatedEventos.slice(-10);
+                    }
+
+                    const updatedEquipment = {
+                        ...eq,
+                        status: newStatus,
+                        horario: now.toISOString(),
+                        eventos: updatedEventos
+                    };
+
+                    this.mockEquipments[randomIndex] = updatedEquipment;
+
+                    const message = {
+                        type: 'UPDATE',
+                        payload: updatedEquipment,
+                        timestamp: Date.now()
+                    };
+
+                    this.notify(message);
+                }, 5000);
+            }
+        }
+
+        const socketService = new MockWebSocketService();
+
+        // ============================================
+        // FLEET CONTEXT
+        // ============================================
+
+        const FleetContext = createContext({
+            vagas: [],
+            loading: true,
+            isConnected: false,
+            lastUpdated: null,
+            refreshData: async () => { },
+            filters: { date: '', startTime: '', endTime: '' },
+            updateFilters: () => { },
+        });
+
+        const FleetProvider = ({ children }) => {
+            const [vagas, setVagas] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [isConnected, setIsConnected] = useState(false);
+            const [lastUpdated, setLastUpdated] = useState(null);
+
+            const [filters, setFilters] = useState({
+                date: new Date().toISOString().split('T')[0],
+                startTime: '',
+                endTime: ''
+            });
+
+            const fetchData = useCallback(async (date, start, end) => {
+                try {
+                    const res = await api.getVagas(date, start);
+
+                    if (res.success) {
+                        setVagas(res.vagas);
+                        setLastUpdated(new Date());
+                        socketService.connect(res.vagas);
+                    }
+                } catch (err) {
+                    console.error("Erro ao buscar dados globais", err);
+                } finally {
+                    setLoading(false);
+                }
+            }, []);
+
+            useEffect(() => {
+                // Initial fetch
+                fetchData(filters.date, filters.startTime, filters.endTime);
+
+                // Polling mechanism (30 seconds)
+                const intervalId = setInterval(() => {
+                    console.log("[Polling] Refreshing data...");
+                    fetchData(filters.date, filters.startTime, filters.endTime);
+                }, 30000);
+
+                // Socket subscription (simulated)
+                const unsubscribe = socketService.subscribe((msg) => {
+                    if (msg.type === 'CONNECTION') {
+                        setIsConnected(msg.payload.status === 'connected');
+                    } else if (msg.type === 'UPDATE') {
+                        // Optimistic UI updates from socket
+                        const updatedEquip = msg.payload;
+                        setVagas(currentVagas => {
+                            const exists = currentVagas.some(v => v.id === updatedEquip.id);
+                            if (exists) {
+                                return currentVagas.map(v => v.id === updatedEquip.id ? updatedEquip : v);
+                            }
+                            return currentVagas;
+                        });
+                        setLastUpdated(new Date());
+                    }
+                });
+
+                return () => {
+                    clearInterval(intervalId);
+                    unsubscribe();
+                    socketService.disconnect();
+                };
+            }, [filters]); // Re-create interval when filters change
+
+            const updateFilters = (newFilters) => {
+                const merged = { ...filters, ...newFilters };
+                setFilters(merged);
+                setLoading(true);
+                fetchData(merged.date, merged.startTime, merged.endTime);
+            };
+
+            return (
+                <FleetContext.Provider value={{
+                    vagas,
+                    loading,
+                    isConnected,
+                    lastUpdated,
+                    refreshData: () => fetchData(filters.date, filters.startTime, filters.endTime),
+                    filters,
+                    updateFilters
+                }}>
+                    {children}
+                </FleetContext.Provider>
+            );
+        };
+
+        const useFleet = () => useContext(FleetContext);
+
+        // ============================================
+        // COMPONENTS
+        // ============================================
+
+        // Sidebar Component
+        const Sidebar = ({ currentPage, onNavigate }) => {
+            const menuItems = [
+                { id: 'monitoramento', label: 'Monitoramento', icon: MonitorPlay },
+                { id: 'analytics', label: 'Dashboard', icon: BarChart3 },
+                { id: 'alarmes', label: 'Alarmes', icon: Bell },
+            ];
+
+            return (
+                <aside className="w-64 bg-[#0f172a] text-slate-300 flex flex-col h-screen fixed left-0 top-0 z-50 border-r border-slate-800 transition-all duration-300 shadow-xl">
+                    <div className="h-20 flex items-center gap-3 px-6 border-b border-slate-800">
+                        <div className="bg-blue-600 text-white p-1.5 rounded-lg shadow-lg shadow-blue-500/20">
+                            <Activity size={24} />
+                        </div>
+                        <div>
+                            <h1 className="font-bold text-white text-lg tracking-tight leading-none">Gestão De Frota</h1>
+                        </div>
+                    </div>
+
+                    <nav className="flex-1 py-8 px-4 space-y-2 overflow-y-auto custom-scrollbar">
+                        <div className="text-xs font-semibold text-slate-500 px-4 mb-4 uppercase tracking-wider">Principal</div>
+
+                        {menuItems.map((item) => {
+                            const isActive = currentPage === item.id;
+                            const Icon = item.icon;
+                            return (
+                                <button
+                                    key={item.id}
+                                    onClick={() => onNavigate(item.id)}
+                                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group ${isActive
+                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50'
+                                        : 'hover:bg-slate-800 hover:text-white'
+                                        }`}
+                                >
+                                    <Icon size={20} className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'} />
+                                    <span className="font-medium">{item.label}</span>
+                                </button>
+                            );
+                        })}
+
+                        <div className="mt-8 text-xs font-semibold text-slate-500 px-4 mb-4 uppercase tracking-wider">Sistema</div>
+                        <button
+                            onClick={() => onNavigate('configuracoes')}
+                            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group ${currentPage === 'configuracoes' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 hover:text-white text-slate-400'}`}
+                        >
+                            <Settings size={20} className={currentPage === 'configuracoes' ? 'text-white' : 'text-slate-400 group-hover:text-white'} />
+                            <span>Configurações</span>
+                        </button>
+                    </nav>
+
+                    <div className="p-4 border-t border-slate-800 bg-[#0b1121]">
+                        <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-cyan-400 flex items-center justify-center text-white font-bold text-sm shadow-md">
+                                AD
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-white truncate">Admin</p>
+                                <p className="text-xs text-slate-500 truncate">Operacional</p>
+                            </div>
+                            <button className="text-slate-500 hover:text-white transition-colors">
+                                <LogOut size={18} />
+                            </button>
+                        </div>
+
+                        <div className="text-center pt-2 border-t border-slate-800/50">
+                            <p className="text-[10px] text-slate-600 font-medium leading-tight">
+                                Desenvolvido por <span className="text-slate-500 hover:text-slate-400 transition-colors">Warlison Abreu</span>
+                            </p>
+                            <p className="text-[9px] text-blue-900/80 font-bold uppercase tracking-widest mt-1 opacity-60">
+                                Grupo GPS
+                            </p>
+                        </div>
+                    </div>
+                </aside>
+            );
+        };
+
+        // Equipment Card Component
+        const EquipmentCard = ({ data, onClick, isSelected }) => {
+            const statusKey = normalizeStatus(data.status);
+            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['sem-apropriacao'];
+            const label = STATUS_LABELS[statusKey] || data.status;
+
+            return (
+                <div
+                    onClick={() => onClick(data)}
+                    className={`bg-white rounded-xl border shadow-sm transition-all cursor-pointer overflow-hidden group relative flex flex-col justify-between
+                        ${isSelected ? 'ring-2 ring-blue-500 border-blue-500 shadow-md' : 'border-slate-200 hover:border-blue-300 hover:shadow-md'}
+                    `}
+                >
+                    <div className={`h-1.5 w-full ${style.icon}`} />
+
+                    <div className="p-5 flex-1 flex flex-col">
+                        <div className="flex justify-between items-start mb-3">
+                            <span className={`text-[10px] px-2.5 py-1 rounded-md font-bold uppercase tracking-wide border ${style.bg} ${style.text} ${style.border.replace('border-', 'border-opacity-20 ')}`}>
+                                {label}
+                            </span>
+                        </div>
+
+                        <div className="mb-4">
+                            <div className="flex items-center gap-2 mb-1">
+                                <MapPin size={16} className="text-blue-500" />
+                                <h3 className="text-lg font-bold text-slate-800 tracking-tight leading-snug" title={data.nome}>
+                                    {data.nome}
+                                </h3>
+                            </div>
+
+                            <div className="flex items-center gap-2 pl-6">
+                                <Truck size={12} className="text-slate-400" />
+                                <div className="text-xs font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 inline-block">
+                                    {data.placa}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-auto pt-3 border-t border-slate-50 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                                <Clock size={12} />
+                                <span>{formatDateTime(data.horario)}</span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                                <span className={`w-2 h-2 rounded-full ${style.icon.replace('bg-', 'bg-')} animate-pulse`}></span>
+                                <span className="text-[10px] text-slate-400 font-medium">Ao vivo</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Detail Panel Component
+        const DetailPanel = ({ equipment, onClose }) => {
+            const [showFullHistory, setShowFullHistory] = useState(false);
+            const [currentTimeStr, setCurrentTimeStr] = useState('');
+
+            useEffect(() => {
+                const updateTime = () => {
+                    const now = new Date();
+                    setCurrentTimeStr(now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+                };
+                updateTime();
+                const interval = setInterval(updateTime, 60000);
+                return () => clearInterval(interval);
+            }, []);
+
+            if (!equipment) return null;
+
+            const statusKey = normalizeStatus(equipment.status);
+            const label = STATUS_LABELS[statusKey];
+            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['sem-apropriacao'];
+            const events = equipment.eventos || [];
+
+            return (
+                <div className="h-full bg-white border-l border-slate-200 shadow-xl flex flex-col w-full animate-slide-in-right relative">
+                    <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-start bg-slate-50">
+                        <div>
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">VAGA SELECIONADA</span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-slate-800 leading-tight mb-1">{equipment.nome}</h2>
+                            <div className="flex items-center gap-2 text-slate-500">
+                                <Truck size={14} />
+                                <span className="text-sm font-mono font-medium">{equipment.placa}</span>
+                            </div>
+                        </div>
+                        <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-lg transition-colors text-slate-400 hover:text-slate-700">
+                            <X size={20} />
+                        </button>
+                    </div>
+
+                    <div className="overflow-y-auto custom-scrollbar flex-1 p-6 space-y-8">
+                        <div className={`p-6 rounded-2xl border ${style.bg} ${style.border.replace('border-', 'border-opacity-30 ')} relative overflow-hidden transition-all duration-300`}>
+                            <div className="relative z-10">
+                                <div className="flex justify-between items-center mb-6">
+                                    <span className={`text-xs font-bold uppercase tracking-wide opacity-80 ${style.text}`}>Status Atual</span>
+                                    <div className={`p-2 rounded-full bg-white/50`}>
+                                        <Activity className={style.text} size={20} />
+                                    </div>
+                                </div>
+
+                                <div className="mb-6">
+                                    <span className={`text-3xl font-bold block mb-1 ${style.text} tracking-tight`}>{label}</span>
+                                    <span className={`text-xs opacity-80 font-medium ${style.text}`}>
+                                        Monitoramento em tempo real
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4 border-t border-black/5 pt-4">
+                                    <div className="flex flex-col">
+                                        <span className={`text-[10px] uppercase font-bold opacity-60 ${style.text}`}>Motor</span>
+                                        <div className={`flex items-center gap-1.5 font-bold ${style.text}`}>
+                                            <Power size={14} />
+                                            {statusKey === 'trabalhando' ? 'Ligado' : 'Desligado'}
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className={`text-[10px] uppercase font-bold opacity-60 ${style.text}`}>Desde</span>
+                                        <div className={`flex items-center gap-1.5 font-bold ${style.text}`}>
+                                            <Clock size={14} />
+                                            {events.length > 0 ? events[events.length - 1].dataInicio : '--:--'}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className={`absolute -right-6 -bottom-6 w-32 h-32 rounded-full opacity-10 ${style.icon.replace('bg-', 'bg-')}`}></div>
+                        </div>
+
+                        <div className="mb-2">
+                            <div className="flex justify-between items-end mb-3">
+                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Timeline do Dia
+                                </h3>
+                                <span className="text-[10px] text-slate-400 font-mono">24h</span>
+                            </div>
+
+                            <div className="relative h-12 bg-slate-100 rounded-lg w-full overflow-hidden flex border border-slate-200">
+                                {events.length === 0 ? (
+                                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400 italic">Sem eventos registrados hoje</div>
+                                ) : (
+                                    events.map((evt, idx) => {
+                                        const isLastEvent = idx === events.length - 1;
+
+                                        let durationMins = 0;
+
+                                        if (isLastEvent && !evt.dataFim && currentTimeStr) {
+                                            const start = timeToMinutes(evt.dataInicio);
+                                            const now = timeToMinutes(currentTimeStr);
+                                            durationMins = Math.max(now - start, 1);
+                                        } else {
+                                            durationMins = timeToMinutes(evt.tempoTotal);
+                                        }
+
+                                        const flexGrow = durationMins > 0 ? durationMins : 1;
+
+                                        const evtKey = normalizeStatus(evt.status || evt.descricao);
+                                        const color = STATUS_COLORS[evtKey]?.icon.replace('bg-', 'bg-') || 'bg-slate-300';
+
+                                        return (
+                                            <div
+                                                key={idx}
+                                                className={`${color} h-full border-r border-white/20 hover:opacity-90 transition-opacity relative group`}
+                                                style={{ flexGrow }}
+                                            >
+                                                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-slate-900 text-white text-[10px] p-2 rounded shadow-xl z-20 whitespace-nowrap">
+                                                    <span className="font-bold block mb-0.5">{evt.descricao}</span>
+                                                    <div className="flex gap-2 font-mono text-slate-300">
+                                                        <span>{evt.dataInicio}</span>
+                                                        <span>-</span>
+                                                        <span>{isLastEvent ? 'Agora' : evt.dataFim || '?'}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                            <div className="flex justify-between text-[10px] text-slate-400 px-1 mt-1 font-mono">
+                                <span>00:00</span>
+                                <span>12:00</span>
+                                <span>23:59</span>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border border-slate-100 rounded-xl bg-slate-50 flex items-center justify-between">
+                            <span className="text-xs text-slate-500 font-medium flex items-center gap-2">
+                                <BarChart2 size={14} /> Última Comunicação
+                            </span>
+                            <span className="text-xs font-bold text-slate-800 font-mono bg-white px-2 py-1 rounded border border-slate-200">
+                                {formatDateTime(equipment.horario)}
+                            </span>
+                        </div>
+
+                        <div>
+                            <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <History size={16} className="text-blue-500" />
+                                Últimos Eventos
+                            </h3>
+                            <div className="space-y-0 relative border-l-2 border-slate-100 ml-2 pl-6 py-1">
+                                {events.slice().reverse().slice(0, 4).map((evt, idx) => {
+                                    const isCurrent = idx === 0;
+                                    const status = normalizeStatus(evt.status || evt.descricao);
+                                    const isWorking = status === 'trabalhando';
+
+                                    return (
+                                        <div key={idx} className="mb-6 last:mb-0 relative group">
+                                            <span className={`absolute -left-[30px] top-1 w-3 h-3 rounded-full border-2 border-white shadow-sm z-10 ${isWorking ? 'bg-emerald-500' : 'bg-slate-300'} ${isCurrent ? 'animate-pulse' : ''}`} />
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <p className="text-xs font-bold text-slate-700">{evt.descricao}</p>
+                                                    <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                                                        Início: {evt.dataInicio}
+                                                    </span>
+                                                </div>
+                                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${isCurrent ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                                                    {isCurrent ? 'Em andamento' : evt.tempoTotal}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {events.length === 0 && <p className="text-xs text-slate-400 italic">Sem eventos recentes.</p>}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="p-4 border-t border-slate-100 bg-slate-50">
+                        <button
+                            onClick={() => setShowFullHistory(true)}
+                            className="w-full bg-slate-800 text-white py-3 rounded-xl text-sm font-bold hover:bg-slate-700 hover:shadow-lg transition-all flex items-center justify-center gap-2 shadow-slate-200"
+                        >
+                            <CalendarDays size={16} /> Ver Histórico Completo
+                        </button>
+                    </div>
+
+                    {showFullHistory && (
+                        <div className="absolute inset-0 z-50 bg-white flex flex-col animate-fade-in">
+                            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                                    <History size={18} /> Histórico Completo
+                                </h3>
+                                <button onClick={() => setShowFullHistory(false)} className="p-2 hover:bg-slate-200 rounded-full"><X size={18} /></button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                                <table className="w-full text-xs text-left">
+                                    <thead className="bg-slate-100 text-slate-500 font-semibold">
+                                        <tr>
+                                            <th className="p-2 rounded-l-lg">Evento</th>
+                                            <th className="p-2">Início</th>
+                                            <th className="p-2">Fim</th>
+                                            <th className="p-2 rounded-r-lg">Duração</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {events.slice().reverse().map((evt, i) => (
+                                            <tr key={i} className="hover:bg-slate-50">
+                                                <td className="p-2 font-medium text-slate-700">{evt.descricao}</td>
+                                                <td className="p-2 text-slate-500">{evt.dataInicio}</td>
+                                                <td className="p-2 text-slate-500">{evt.dataFim || '-'}</td>
+                                                <td className="p-2 text-slate-500 font-mono">{i === 0 ? 'Atual' : evt.tempoTotal}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ============================================
+        // PAGES
+        // ============================================
+
+        // Monitoramento Page
+        const MonitoramentoPage = () => {
+            const { vagas, loading, refreshData, filters, updateFilters } = useFleet();
+            const [selectedEquip, setSelectedEquip] = useState(null);
+            const [filterText, setFilterText] = useState('');
+
+            const activeEquipment = selectedEquip ? vagas.find(v => v.id === selectedEquip.id) || selectedEquip : null;
+
+            const filteredVagas = vagas.filter(v =>
+                v.nome.toLowerCase().includes(filterText.toLowerCase()) ||
+                v.placa.toLowerCase().includes(filterText.toLowerCase())
+            );
+
+            return (
+                <div className="flex h-full w-full">
+                    <div className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/50">
+                        <div className="flex-shrink-0 px-6 pt-6 pb-2 z-20 relative">
+                            <div className="mb-6 flex flex-col sm:flex-row justify-between items-end sm:items-center gap-4">
+                                <div>
+                                    <div className="flex items-center gap-3">
+                                        <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Monitoramento</h1>
+                                    </div>
+                                    <p className="text-slate-500 text-sm mt-0.5">Visão geral da operação em tempo real</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                <div className="flex flex-col lg:flex-row gap-4">
+                                    <div className="flex-1 relative">
+                                        <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                                        <input
+                                            type="text"
+                                            placeholder="Pesquisar Vaga ou Placa..."
+                                            value={filterText}
+                                            onChange={(e) => setFilterText(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                        />
+                                    </div>
+
+                                    <div className="h-8 w-[1px] bg-slate-200 hidden lg:block self-center"></div>
+
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                            <Calendar size={16} className="text-blue-500" />
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Data</span>
+                                            <input
+                                                type="date"
+                                                value={filters.date}
+                                                onChange={(e) => updateFilters({ date: e.target.value })}
+                                                className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer"
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                            <Clock size={16} className="text-emerald-500" />
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Início</span>
+                                            <input
+                                                type="time"
+                                                value={filters.startTime}
+                                                onChange={(e) => updateFilters({ startTime: e.target.value })}
+                                                className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer"
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                            <Clock size={16} className="text-red-500" />
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Fim</span>
+                                            <input
+                                                type="time"
+                                                value={filters.endTime}
+                                                onChange={(e) => updateFilters({ endTime: e.target.value })}
+                                                className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer"
+                                            />
+                                        </div>
+
+                                        <button onClick={() => refreshData()} className="p-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm" title="Recarregar Dados">
+                                            <RefreshCw size={18} className={`${loading ? 'animate-spin' : ''}`} />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-6 pt-4">
+                            {loading && vagas.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                                    <RefreshCw className="animate-spin mb-4 text-blue-200" size={40} />
+                                    <p className="animate-pulse">Sincronizando frota...</p>
+                                </div>
+                            ) : filteredVagas.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-20 bg-white rounded-xl border border-dashed border-slate-300">
+                                    <div className="bg-slate-50 p-4 rounded-full mb-3"><Filter size={24} className="text-slate-400" /></div>
+                                    <p className="text-slate-600 font-medium">Nenhum veículo encontrado.</p>
+                                    <p className="text-sm text-slate-400 mt-1">Tente ajustar os filtros de horário.</p>
+                                    <button onClick={() => { setFilterText(''); updateFilters({ startTime: '', endTime: '' }); }} className="mt-4 text-blue-600 font-bold text-sm hover:underline">Limpar Filtros</button>
+                                </div>
+                            ) : (
+                                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 ${selectedEquip ? 'xl:grid-cols-2' : 'xl:grid-cols-4'} gap-5 transition-all`}>
+                                    {filteredVagas.map((vaga) => (
+                                        <EquipmentCard
+                                            key={vaga.id}
+                                            data={vaga}
+                                            onClick={setSelectedEquip}
+                                            isSelected={selectedEquip?.id === vaga.id}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {activeEquipment && (
+                        <div className="w-[420px] border-l border-slate-200 bg-white h-full relative flex-shrink-0 transition-all duration-300 shadow-2xl z-30">
+                            <DetailPanel equipment={activeEquipment} onClose={() => setSelectedEquip(null)} />
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Analytics Page
+        const AnalyticsPage = () => {
+            const { vagas } = useFleet();
+
+            const total = vagas.length || 1;
+            const workingCount = vagas.filter(v => normalizeStatus(v.status) === 'trabalhando').length;
+            const stoppedCount = vagas.filter(v => normalizeStatus(v.status) === 'parado').length;
+            const maintenanceCount = vagas.filter(v => normalizeStatus(v.status) === 'manutencao').length;
+
+            const workingPct = (workingCount / total) * 100;
+            const stoppedPct = (stoppedCount / total) * 100;
+            const maintPct = (maintenanceCount / total) * 100;
+
+            const pieGradient = `conic-gradient(#10b981 0% ${workingPct}%, #ef4444 ${workingPct}% ${workingPct + stoppedPct}%, #f59e0b ${workingPct + stoppedPct}% ${workingPct + stoppedPct + maintPct}%, #cbd5e1 ${workingPct + stoppedPct + maintPct}% 100%)`;
+
+            const hourlyData = Array.from({ length: 24 }, (_, i) => {
+                let baseVal = 0;
+                if (i < 6) baseVal = Math.random() * 20;
+                else if (i < 12) baseVal = 60 + Math.random() * 30;
+                else if (i === 12 || i === 13) baseVal = 40 + Math.random() * 20;
+                else if (i < 18) baseVal = 70 + Math.random() * 25;
+                else baseVal = 30 + Math.random() * 30;
+
+                return Math.min(Math.round(baseVal), 100);
+            });
+
+            return (
+                <div className="p-8 h-full overflow-y-auto custom-scrollbar bg-slate-50 animate-fade-in">
+                    <div className="flex items-center gap-4 mb-8">
+                        <div className="bg-indigo-600 p-3 rounded-xl text-white shadow-lg shadow-indigo-500/20">
+                            <BarChart3 size={28} />
+                        </div>
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-800">Analytics</h1>
+                            <p className="text-slate-500 text-sm">Inteligência operacional e KPIs</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+                        <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden group">
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Activity size={60} className="text-emerald-500" /></div>
+                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Em Operação</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{workingCount}</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
+                                <div className="bg-emerald-500 h-full" style={{ width: `${workingPct}%` }}></div>
+                            </div>
+                        </div>
+                        <div className="bg-white p-5 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden group">
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><AlertTriangle size={60} className="text-red-500" /></div>
+                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Parado</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{stoppedCount}</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
+                                <div className="bg-red-500 h-full" style={{ width: `${stoppedPct}%` }}></div>
+                            </div>
+                        </div>
+                        <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm relative overflow-hidden group">
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Zap size={60} className="text-indigo-500" /></div>
+                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Produtividade Média</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">78%</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
+                                <div className="bg-indigo-500 h-full" style={{ width: `78%` }}></div>
+                            </div>
+                        </div>
+                        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Calendar size={60} className="text-slate-400" /></div>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Ciclo Médio</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">4.5h</div>
+                            <p className="text-xs text-slate-400 mt-2">Por operação completa</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+                                <Clock size={20} className="text-blue-600" />
+                                Performance Hora a Hora (24h)
+                            </h3>
+                            <div className="flex gap-2">
+                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-emerald-400"></span> Alta</span>
+                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Média</span>
+                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-red-400"></span> Baixa</span>
+                            </div>
+                        </div>
+
+                        <div className="h-64 w-full flex items-end justify-between gap-1 sm:gap-2 px-2 pb-2">
+                            {hourlyData.map((val, hour) => {
+                                let barColor = 'bg-red-400';
+                                if (val > 40) barColor = 'bg-amber-400';
+                                if (val > 70) barColor = 'bg-emerald-400';
+
+                                return (
+                                    <div key={hour} className="flex-1 flex flex-col justify-end group cursor-pointer relative h-full">
+                                        <div
+                                            className={`w-full rounded-t-sm sm:rounded-t-md transition-all duration-300 relative flex flex-col justify-end opacity-80 group-hover:opacity-100 ${barColor}`}
+                                            style={{ height: `${val}%` }}
+                                        >
+                                            <div className="w-full h-1 bg-white/30 rounded-t-sm sm:rounded-t-md"></div>
+                                        </div>
+                                        <span className="text-[10px] text-slate-400 text-center mt-2 font-mono border-t border-transparent group-hover:border-slate-300 pt-1">
+                                            {hour.toString().padStart(2, '0')}h
+                                        </span>
+                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-20">
+                                            <div className="bg-slate-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl whitespace-nowrap text-center">
+                                                <span className="font-bold block text-sm">{hour}:00 - {hour}:59</span>
+                                                <span className="text-emerald-300 font-bold">{val}% Produtividade</span>
+                                            </div>
+                                            <div className="w-2 h-2 bg-slate-800 rotate-45 mx-auto -mt-1"></div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="w-full h-[1px] bg-slate-200 mt-[-24px]"></div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
+                            <h3 className="text-sm font-bold text-slate-700 mb-6 w-full flex items-center gap-2">
+                                <PieChart size={16} className="text-indigo-500" /> Distribuição da Frota
+                            </h3>
+                            <div className="relative w-56 h-56 rounded-full shadow-inner mb-6 transition-all hover:scale-105 duration-500" style={{ background: pieGradient }}>
+                                <div className="absolute inset-0 m-auto w-32 h-32 bg-white rounded-full flex items-center justify-center shadow-lg">
+                                    <div className="text-center">
+                                        <span className="block text-3xl font-bold text-slate-800">{total}</span>
+                                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Veículos</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="w-full grid grid-cols-2 gap-3">
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Operando</span> <span className="font-bold">{Math.round(workingPct)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span> Parado</span> <span className="font-bold">{Math.round(stoppedPct)}%</span></div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-700 mb-6 flex items-center gap-2">
+                                <Truck size={16} className="text-emerald-500" /> Top Eficiência Operacional
+                            </h3>
+                            <div className="space-y-6">
+                                {vagas.slice(0, 5).map((v, i) => (
+                                    <div key={i} className="flex items-center gap-4 group hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                                        <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i === 0 ? 'bg-yellow-100 text-yellow-600' : 'bg-slate-100 text-slate-500'}`}>
+                                            {i + 1}
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-sm font-bold text-slate-700">{v.nome}</span>
+                                                <span className="text-sm font-bold text-emerald-600">9{8 - i}%</span>
+                                            </div>
+                                            <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `9${8 - i}%` }}></div>
+                                            </div>
+                                        </div>
+                                        <div className="text-xs font-mono text-slate-400 border border-slate-200 px-2 py-1 rounded bg-white">
+                                            {v.placa}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-8">
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[500px]">
+                            <div className="p-6 border-b border-slate-100">
+                                <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+                                    <Activity size={20} className="text-indigo-500" /> Detalhe Operacional por Vaga
+                                </h3>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-0">
+                                <table className="w-full text-left border-collapse">
+                                    <thead className="bg-slate-50 sticky top-0 z-10 text-xs uppercase font-bold text-slate-500 tracking-wider">
+                                        <tr>
+                                            <th className="px-6 py-4">Vaga</th>
+                                            <th className="px-6 py-4">Placa</th>
+                                            <th className="px-6 py-4">Status</th>
+                                            <th className="px-6 py-4">Atualização</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 text-sm">
+                                        {vagas.map(v => {
+                                            const status = normalizeStatus(v.status);
+                                            const label = STATUS_LABELS[status];
+                                            const style = STATUS_COLORS[status] || STATUS_COLORS['sem-apropriacao'];
+
+                                            return (
+                                                <tr key={v.id} className="hover:bg-slate-50 transition-colors group">
+                                                    <td className="px-6 py-4 font-bold text-slate-800">{v.nome}</td>
+                                                    <td className="px-6 py-4">
+                                                        <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600 border border-slate-200 text-xs">{v.placa}</span>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide border ${style.bg} ${style.text} ${style.border.replace('border-', 'border-opacity-20 ')}`}>
+                                                            {label}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4 text-slate-500 text-xs font-mono">
+                                                        {formatDateTime(v.horario)}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Alarmes Page
+        const AlarmesPage = () => {
+            const [rules, setRules] = useState([
+                { id: 1, name: 'Alerta de Ociosidade', condition: 'Motor Desligado > 60 min', active: true, icon: 'power' },
+                { id: 2, name: 'Perda de Comunicação', condition: 'Sem Sinal > 120 min', active: true, icon: 'alert' },
+            ]);
+
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [newRule, setNewRule] = useState({ name: '', conditionType: 'idle', threshold: '60' });
+
+            const toggleRule = (id) => {
+                setRules(rules.map(r => r.id === id ? { ...r, active: !r.active } : r));
+            };
+
+            const deleteRule = (id) => {
+                if (window.confirm('Deseja excluir esta regra?')) {
+                    setRules(rules.filter(r => r.id !== id));
+                }
+            };
+
+            const handleAddRule = async () => {
+                let conditionText = '';
+                let icon = 'alert';
+
+                switch (newRule.conditionType) {
+                    case 'idle':
+                        conditionText = `Motor Desligado > ${newRule.threshold} min`;
+                        icon = 'power';
+                        break;
+                    case 'nosignal':
+                        conditionText = `Sem Sinal > ${newRule.threshold} min`;
+                        icon = 'alert';
+                        break;
+                    case 'maintenance':
+                        conditionText = `Em Manutenção > ${newRule.threshold} min`;
+                        icon = 'wrench';
+                        break;
+                    default: conditionText = `Genérico > ${newRule.threshold} min`;
+                }
+
+                const rule = {
+                    id: Date.now(),
+                    name: newRule.name || 'Nova Regra',
+                    condition: conditionText,
+                    active: true,
+                    icon: icon
+                };
+                setRules([...rules, rule]);
+                await api.saveRule(rule);
+                setIsModalOpen(false);
+                setNewRule({ name: '', conditionType: 'idle', threshold: '60' });
+            };
+
+            return (
+                <div className="p-8 max-w-5xl mx-auto h-full overflow-y-auto">
+                    <div className="flex justify-between items-center mb-8">
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-800">Gerenciamento de Alarmes</h1>
+                            <p className="text-slate-500 text-sm">Regras automáticas para notificações de anomalia</p>
+                        </div>
+                        <button
+                            onClick={() => setIsModalOpen(true)}
+                            className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20 active:scale-95"
+                        >
+                            <Plus size={18} /> Criar Nova Regra
+                        </button>
+                    </div>
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 transform transition-all scale-100">
+                                <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                        <AlertOctagon className="text-blue-500" /> Nova Regra de Alarme
+                                    </h3>
+                                    <button onClick={() => setIsModalOpen(false)} className="bg-slate-100 p-1 rounded-full hover:bg-slate-200"><X size={18} className="text-slate-500" /></button>
+                                </div>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Nome da Regra</label>
+                                        <input
+                                            type="text"
+                                            className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                                            placeholder="Ex: Alerta Crítico de Ociosidade"
+                                            value={newRule.name}
+                                            onChange={e => setNewRule({ ...newRule, name: e.target.value })}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Tipo de Condição</label>
+                                        <select
+                                            className="w-full border border-slate-300 rounded-lg p-3 text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                            value={newRule.conditionType}
+                                            onChange={e => setNewRule({ ...newRule, conditionType: e.target.value })}
+                                        >
+                                            <option value="idle">Ociosidade (Motor Desligado)</option>
+                                            <option value="nosignal">Perda de Conexão (Sem Sinal)</option>
+                                            <option value="maintenance">Tempo em Manutenção Excedido</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Limite de Tempo (Minutos)</label>
+                                        <input
+                                            type="number"
+                                            className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                            placeholder="60"
+                                            value={newRule.threshold}
+                                            onChange={e => setNewRule({ ...newRule, threshold: e.target.value })}
+                                        />
+                                    </div>
+
+                                    <div className="pt-4">
+                                        <button
+                                            onClick={handleAddRule}
+                                            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg"
+                                        >
+                                            <Save size={18} /> Salvar e Ativar
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="space-y-4">
+                        {rules.map(rule => (
+                            <div key={rule.id} className="group flex flex-col sm:flex-row items-start sm:items-center justify-between p-5 bg-white border border-slate-200 rounded-2xl hover:border-blue-300 hover:shadow-md transition-all">
+                                <div className="flex items-center gap-5 mb-4 sm:mb-0">
+                                    <div className={`p-4 rounded-2xl shadow-sm ${rule.icon === 'power' ? 'bg-red-50 text-red-500' : rule.icon === 'wrench' ? 'bg-amber-50 text-amber-500' : 'bg-slate-100 text-slate-500'}`}>
+                                        <Bell size={24} />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-bold text-lg text-slate-800">{rule.name}</h4>
+                                        <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
+                                            <span className="bg-slate-100 px-2 py-0.5 rounded text-xs font-mono border border-slate-200">IF</span>
+                                            {rule.condition}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-6 w-full sm:w-auto justify-between sm:justify-end">
+                                    <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleRule(rule.id)}>
+                                        <span className={`text-xs font-bold uppercase ${rule.active ? 'text-blue-600' : 'text-slate-400'}`}>
+                                            {rule.active ? 'Ativado' : 'Desativado'}
+                                        </span>
+                                        <div className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors duration-300 ${rule.active ? 'bg-blue-600 justify-end' : 'bg-slate-200 justify-start'}`}>
+                                            <div className="bg-white w-4 h-4 rounded-full shadow-md"></div>
+                                        </div>
+                                    </div>
+
+                                    <div className="h-8 w-[1px] bg-slate-100 mx-2 hidden sm:block"></div>
+
+                                    <button onClick={() => deleteRule(rule.id)} className="text-slate-300 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-xl">
+                                        <Trash2 size={20} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                        {rules.length === 0 && (
+                            <div className="text-center py-20 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
+                                <p className="text-slate-400 font-medium">Nenhuma regra configurada.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Configuracoes Page
+        const ConfiguracoesPage = () => {
+            const [saved, setSaved] = useState(false);
+
+            const handleSave = () => {
+                setSaved(true);
+                setTimeout(() => setSaved(false), 2000);
+            };
+
+            return (
+                <div className="p-8 max-w-4xl mx-auto h-full overflow-y-auto">
+                    <div className="flex justify-between items-center mb-8">
+                        <h1 className="text-3xl font-bold text-slate-800">Configurações</h1>
+                        {saved && <span className="text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded-full animate-pulse">Alterações Salvas!</span>}
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider">Geral</div>
+
+                            <div className="divide-y divide-slate-100">
+                                <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
+                                    <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:scale-110 transition-transform"><User size={24} /></div>
+                                    <div className="flex-1">
+                                        <h3 className="font-bold text-slate-800">Perfil de Administrador</h3>
+                                        <p className="text-sm text-slate-500">Gerenciar conta admin e permissões de acesso</p>
+                                    </div>
+                                    <button className="text-blue-600 text-sm font-bold border border-blue-100 px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors" onClick={handleSave}>Editar</button>
+                                </div>
+
+                                <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
+                                    <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:scale-110 transition-transform"><Database size={24} /></div>
+                                    <div className="flex-1">
+                                        <h3 className="font-bold text-slate-800">Banco de Dados (Google Sheets)</h3>
+                                        <p className="text-sm text-slate-500">Status: <span className="text-emerald-600 font-bold">Conectado via Apps Script</span></p>
+                                    </div>
+                                    <button className="text-slate-500 text-sm font-medium hover:text-slate-800" onClick={() => window.open('https://docs.google.com/spreadsheets', '_blank')}>Abrir Planilha</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider">Preferências</div>
+                            <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
+                                <div className="bg-amber-100 p-3 rounded-xl text-amber-600 group-hover:scale-110 transition-transform"><BellRing size={24} /></div>
+                                <div className="flex-1">
+                                    <h3 className="font-bold text-slate-800">Notificações de Sistema</h3>
+                                    <p className="text-sm text-slate-500">Configurar alertas sonoros e pop-ups</p>
+                                </div>
+                                <div className="relative inline-block w-12 h-6 transition duration-200 ease-in-out bg-blue-600 rounded-full cursor-pointer">
+                                    <span className="absolute left-6 top-1 bg-white w-4 h-4 rounded-full shadow-md transition-all"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end pt-4">
+                            <button className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95" onClick={handleSave}>
+                                <Save size={18} /> Salvar Tudo
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mt-12 text-center text-slate-400 text-xs font-mono">
+                        System Version 2.1.0 • Build 2024.05.20
+                    </div>
+                </div>
+            );
+        };
+
+        // ============================================
+        // MAIN APP
+        // ============================================
+
+        const App = () => {
+            const [currentPage, setCurrentPage] = useState('monitoramento');
+
+            useEffect(() => {
+                // Inicializa os ícones do Lucide após montar o componente
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [currentPage]); // Re-inicializa quando mudar de página
+
+            return (
+                <FleetProvider>
+                    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden">
+                        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+
+                        <main className="flex-1 ml-64 h-full overflow-hidden relative flex flex-col">
+                            {currentPage === 'monitoramento' && <MonitoramentoPage />}
+                            {currentPage === 'analytics' && <AnalyticsPage />}
+                            {currentPage === 'alarmes' && <AlarmesPage />}
+                            {currentPage === 'configuracoes' && <ConfiguracoesPage />}
+                        </main>
+                    </div>
+                </FleetProvider>
+            );
+        };
+
+        // ============================================
+        // RENDER
+        // ============================================
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
