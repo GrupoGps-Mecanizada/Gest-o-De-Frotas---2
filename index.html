@@ -91,6 +91,271 @@
             useRef
         } = React;
 
+        // ============================================
+        // CONFLICT RESOLVER - Sistema de Resolução de Conflitos
+        // ============================================
+
+        class ConflictResolver {
+            constructor() {
+                this.stats = {
+                    conflictsResolved: 0,
+                    duplicatesRemoved: 0,
+                    originalRecords: 0,
+                    finalRecords: 0,
+                    consecutiveConsolidated: 0
+                };
+
+                this.config = {
+                    gapTolerance: 60, // segundos
+                    conflictResolution: 'priority'
+                };
+
+                this.statusPriorities = {
+                    'Em manutenção': 15, 'Em Manutenção': 15,
+                    'Fora da Planta': 14,
+                    'Motor Ligado': 10, 'Trabalhando': 10,
+                    'Motor Desligado': 6, 'Parado': 6,
+                    'Indisponível': 4, 'Sem Apropriação': 4
+                };
+            }
+
+            resolveConflicts(eventsList, equipmentName) {
+                if (!eventsList || eventsList.length === 0) return [];
+
+                console.log(`🔧 [${equipmentName}] Resolvendo ${eventsList.length} eventos`);
+                this.stats.originalRecords += eventsList.length;
+
+                let resolved = eventsList;
+                resolved = this.removeDuplicates(resolved);
+                resolved = this.sortByTime(resolved);
+                resolved = this.resolveOverlaps(resolved);
+                resolved = this.consolidateConsecutive(resolved);
+
+                this.stats.finalRecords += resolved.length;
+
+                const reduction = ((1 - resolved.length / eventsList.length) * 100).toFixed(1);
+                console.log(`✅ [${equipmentName}] ${eventsList.length} → ${resolved.length} (${reduction}% redução)`);
+
+                return resolved;
+            }
+
+            removeDuplicates(events) {
+                const seen = new Set();
+                return events.filter(evt => {
+                    const key = `${evt.dataInicio}-${evt.dataFim}-${evt.descricao}-${evt.status}`;
+                    if (seen.has(key)) {
+                        this.stats.duplicatesRemoved++;
+                        return false;
+                    }
+                    seen.add(key);
+                    return true;
+                });
+            }
+
+            sortByTime(events) {
+                return [...events].sort((a, b) => {
+                    const timeA = this.parseTime(a.dataInicio);
+                    const timeB = this.parseTime(b.dataInicio);
+                    return timeA - timeB;
+                });
+            }
+
+            resolveOverlaps(events) {
+                if (events.length <= 1) return events;
+
+                const resolved = [];
+                let current = null;
+
+                for (const evt of events) {
+                    if (!current) {
+                        current = { ...evt };
+                        continue;
+                    }
+
+                    const currentEnd = this.parseTime(current.dataFim);
+                    const evtStart = this.parseTime(evt.dataInicio);
+
+                    if (evtStart < currentEnd) {
+                        this.stats.conflictsResolved++;
+                        const priority1 = this.statusPriorities[current.descricao] || 0;
+                        const priority2 = this.statusPriorities[evt.descricao] || 0;
+
+                        if (priority2 > priority1) {
+                            current = { ...evt };
+                        }
+                    } else {
+                        resolved.push(current);
+                        current = { ...evt };
+                    }
+                }
+
+                if (current) resolved.push(current);
+                return resolved;
+            }
+
+            consolidateConsecutive(events) {
+                if (events.length <= 1) return events;
+
+                const consolidated = [];
+                let current = null;
+
+                for (const evt of events) {
+                    if (!current) {
+                        current = { ...evt };
+                        continue;
+                    }
+
+                    const currentEnd = this.parseTime(current.dataFim);
+                    const evtStart = this.parseTime(evt.dataInicio);
+                    const gapSeconds = (evtStart - currentEnd) / 1000;
+
+                    const sameStatus = (current.descricao === evt.descricao) ||
+                        (current.status === evt.status);
+
+                    if (sameStatus && Math.abs(gapSeconds) <= this.config.gapTolerance) {
+                        this.stats.consecutiveConsolidated++;
+                        current.dataFim = evt.dataFim;
+                        current.tempoTotal = this.calculateDuration(current.dataInicio, current.dataFim);
+                    } else {
+                        consolidated.push(current);
+                        current = { ...evt };
+                    }
+                }
+
+                if (current) consolidated.push(current);
+                return consolidated;
+            }
+
+            parseTime(timeStr) {
+                if (!timeStr) return 0;
+                if (timeStr instanceof Date) return timeStr.getTime();
+
+                const match = timeStr.match(/(\d{1,2}):(\d{2})/);
+                if (match) {
+                    const hours = parseInt(match[1]);
+                    const minutes = parseInt(match[2]);
+                    const now = new Date();
+                    now.setHours(hours, minutes, 0, 0);
+                    return now.getTime();
+                }
+
+                return new Date(timeStr).getTime();
+            }
+
+            calculateDuration(start, end) {
+                if (!start || !end) return '00:00';
+                const startTime = this.parseTime(start);
+                const endTime = this.parseTime(end);
+                const diff = endTime - startTime;
+                if (diff < 0) return '00:00';
+                const hours = Math.floor(diff / 3600000);
+                const minutes = Math.floor((diff % 3600000) / 60000);
+                return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+            }
+
+            getStats() {
+                return { ...this.stats };
+            }
+
+            resetStats() {
+                this.stats = {
+                    conflictsResolved: 0,
+                    duplicatesRemoved: 0,
+                    originalRecords: 0,
+                    finalRecords: 0,
+                    consecutiveConsolidated: 0
+                };
+            }
+        }
+
+        // ============================================
+        // CACHE MANAGER - Sistema de Cache Inteligente
+        // ============================================
+
+        class CacheManager {
+            constructor() {
+                this.cache = new Map();
+                this.lastHashes = new Map();
+                this.hitCount = 0;
+                this.missCount = 0;
+                this.defaultTTL = 3 * 60 * 1000; // 3 minutos
+            }
+
+            has(key) {
+                if (!this.cache.has(key)) return false;
+
+                const item = this.cache.get(key);
+                if (item.expires && Date.now() >= item.expires) {
+                    this.cache.delete(key);
+                    return false;
+                }
+                return true;
+            }
+
+            get(key) {
+                if (!this.has(key)) {
+                    this.missCount++;
+                    return null;
+                }
+
+                this.hitCount++;
+                return this.cache.get(key).value;
+            }
+
+            set(key, value, ttl = null) {
+                const expirationTime = ttl || this.defaultTTL;
+                this.cache.set(key, {
+                    value: value,
+                    expires: expirationTime > 0 ? Date.now() + expirationTime : null,
+                    created: Date.now()
+                });
+            }
+
+            generateHash(data) {
+                const str = JSON.stringify(data);
+                let hash = 5381;
+                for (let i = 0; i < str.length; i++) {
+                    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+                    hash = hash & hash;
+                }
+                return hash.toString(36);
+            }
+
+            hasChanged(key, data) {
+                const newHash = this.generateHash(data);
+                const oldHash = this.lastHashes.get(key);
+                this.lastHashes.set(key, newHash);
+
+                if (!oldHash) return true;
+                return oldHash !== newHash;
+            }
+
+            clear() {
+                this.cache.clear();
+                this.lastHashes.clear();
+            }
+
+            getStats() {
+                const hitRate = this.hitCount + this.missCount > 0
+                    ? (this.hitCount / (this.hitCount + this.missCount) * 100).toFixed(1)
+                    : 0;
+
+                return {
+                    size: this.cache.size,
+                    hits: this.hitCount,
+                    misses: this.missCount,
+                    hitRate: `${hitRate}%`
+                };
+            }
+        }
+
+        // Criar instâncias globais
+        const conflictResolver = new ConflictResolver();
+        const cacheManager = new CacheManager();
+
+        console.log('✅ ConflictResolver e CacheManager inicializados');
+        console.log('📊 Sistema Novo - Versão Otimizada com lógica do Sistema Antigo');
+
         // Converte kebab-case para PascalCase (ex: "alert-triangle" → "AlertTriangle")
         const toPascalCase = (str) => str.replace(/(^|-)([a-z0-9])/g, (_, __, c) => c.toUpperCase());
 
@@ -156,7 +421,7 @@
         // CONSTANTS & UTILITIES
         // ============================================
 
-        const GAS_URL = 'https://script.google.com/macros/s/AKfycbxb2j53XshjkBsa8PfGrCVNi_GBKcvGogVbsCE8a1Fg_H93B3M091VuD5VFMT-mzbCaVQ/exec';
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbyyFOasW2D6TAOMqUeqaYzkUKbkn7yTmRG3mtxZeXyl2mOz6pGyYto0Un8-48WYlvrmoQ/exec';
 
         const STATUS_COLORS = {
             trabalhando: { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-500', icon: 'bg-emerald-500' },
@@ -574,12 +839,53 @@
 
             const fetchData = useCallback(async (date, start, end) => {
                 try {
-                    const res = await api.getVagas(date, start);
-                    if (res.success) {
-                        setVagas(res.vagas);
+                    // Verificar cache primeiro
+                    const cacheKey = `vagas_${date}_${start}_${end}`;
+                    const cached = cacheManager.get(cacheKey);
+
+                    if (cached) {
+                        console.log('✅ Usando dados do cache');
+                        setVagas(cached);
                         setLastUpdated(new Date());
                         setIsConnected(true);
-                        socketService.connect(res.vagas);
+                        setLoading(false);
+                        return;
+                    }
+
+                    const res = await api.getVagas(date, start);
+                    if (res.success) {
+                        // Verificar se dados mudaram
+                        if (!cacheManager.hasChanged(cacheKey, res.vagas)) {
+                            console.log('✅ Dados não mudaram, mantendo estado atual');
+                            setLoading(false);
+                            return;
+                        }
+
+                        // Processar eventos com ConflictResolver
+                        const processedVagas = res.vagas.map(vaga => {
+                            if (vaga.eventos && vaga.eventos.length > 0) {
+                                const resolvedEvents = conflictResolver.resolveConflicts(
+                                    vaga.eventos,
+                                    vaga.nome
+                                );
+                                return { ...vaga, eventos: resolvedEvents };
+                            }
+                            return vaga;
+                        });
+
+                        // Salvar no cache
+                        cacheManager.set(cacheKey, processedVagas);
+
+                        setVagas(processedVagas);
+                        setLastUpdated(new Date());
+                        setIsConnected(true);
+                        socketService.connect(processedVagas);
+
+                        // Log de estatísticas
+                        const stats = conflictResolver.getStats();
+                        if (stats.originalRecords > 0) {
+                            console.log('📊 Estatísticas de processamento:', stats);
+                        }
                     }
                 } catch (err) {
                     console.error("Erro ao buscar dados globais", err);
@@ -588,6 +894,27 @@
                     setLoading(false);
                 }
             }, []);
+
+            // Método para visualizar estatísticas
+            const getSystemStats = useCallback(() => {
+                return {
+                    cache: cacheManager.getStats(),
+                    conflictResolver: conflictResolver.getStats()
+                };
+            }, []);
+
+            // Método para limpar cache
+            const clearCache = useCallback(() => {
+                cacheManager.clear();
+                conflictResolver.resetStats();
+                console.log('🧹 Cache limpo');
+            }, []);
+
+            // Expor métodos globalmente para debug
+            useEffect(() => {
+                window.fleetSystemStats = getSystemStats;
+                window.fleetClearCache = clearCache;
+            }, [getSystemStats, clearCache]);
 
             const handleDismissAlert = useCallback(async (alertId) => {
                 // Optimistic UI: remove imediatamente
@@ -1758,6 +2085,58 @@
                                     <p className="text-sm font-bold text-slate-600">Testar Notificação</p>
                                     <p className="text-xs text-slate-400 mt-0.5">Clique para visualizar um exemplo de toast</p>
                                 </button>
+                            </div>
+                        </div>
+
+                        {/* Estatísticas do Sistema (NOVO) */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider flex items-center gap-2">
+                                <BarChart3 size={16} className="text-blue-500" /> Estatísticas de Performance
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <button
+                                    onClick={() => {
+                                        const stats = window.fleetSystemStats ? window.fleetSystemStats() : null;
+                                        if (stats) {
+                                            console.log('=== 📊 ESTATÍSTICAS DO SISTEMA ===');
+                                            console.log('Cache:', stats.cache);
+                                            console.log('Conflict Resolver:', stats.conflictResolver);
+                                            console.log('==================================');
+                                            addToast('Estatísticas mostradas no console (F12)', 'info');
+                                        } else {
+                                            addToast('Sistema ainda não inicializado', 'warning');
+                                        }
+                                    }}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <BarChart3 size={18} /> Ver Estatísticas no Console
+                                </button>
+
+                                <button
+                                    onClick={() => {
+                                        if (window.fleetClearCache) {
+                                            window.fleetClearCache();
+                                            addToast('Cache limpo com sucesso!', 'success');
+                                        } else {
+                                            addToast('Sistema ainda não inicializado', 'warning');
+                                        }
+                                    }}
+                                    className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <RefreshCw size={18} /> Limpar Cache
+                                </button>
+
+                                <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                                    <p className="text-xs text-blue-700">
+                                        <strong>💡 Dica:</strong> Use o console do navegador (F12) para monitorar:
+                                    </p>
+                                    <ul className="text-xs text-blue-600 mt-2 space-y-1 ml-4 list-disc">
+                                        <li>Logs de consolidação de eventos</li>
+                                        <li>Estatísticas de cache (hit rate)</li>
+                                        <li>Duplicatas removidas</li>
+                                        <li>Conflitos resolvidos</li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
 
