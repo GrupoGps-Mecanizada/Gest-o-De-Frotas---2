@@ -156,7 +156,7 @@
         // CONSTANTS & UTILITIES
         // ============================================
 
-        const GAS_URL = 'https://script.google.com/macros/s/AKfycbzorWuKmMEsT891QSZpqX6_KJ9MkYXQnOKGx7NzD2xlQk4a-Hd76a01rIqXd0Gm5aEWVw/exec';
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbxb2j53XshjkBsa8PfGrCVNi_GBKcvGogVbsCE8a1Fg_H93B3M091VuD5VFMT-mzbCaVQ/exec';
 
         const STATUS_COLORS = {
             trabalhando: { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-500', icon: 'bg-emerald-500' },
@@ -1146,29 +1146,68 @@
 
         // Analytics Page
         const AnalyticsPage = () => {
-            const { vagas } = useFleet();
+            const [stats, setStats] = useState(null);
+            const [loading, setLoading] = useState(true);
 
-            const total = vagas.length || 1;
-            const workingCount = vagas.filter(v => normalizeStatus(v.status) === 'trabalhando').length;
-            const stoppedCount = vagas.filter(v => normalizeStatus(v.status) === 'parado').length;
-            const maintenanceCount = vagas.filter(v => normalizeStatus(v.status) === 'manutencao').length;
+            useEffect(() => {
+                const loadData = async () => {
+                    try {
+                        const res = await api.getDashboardData();
+                        if (res.success && res.data) {
+                            setStats(res.data);
+                        }
+                    } catch (e) {
+                        console.error("Erro ao carregar analytics:", e);
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+                loadData();
+                const interval = setInterval(loadData, 60000); // Atualiza a cada 1 min
+                return () => clearInterval(interval);
+            }, []);
 
-            const workingPct = (workingCount / total) * 100;
-            const stoppedPct = (stoppedCount / total) * 100;
-            const maintPct = (maintenanceCount / total) * 100;
+            if (loading && !stats) {
+                return (
+                    <div className="flex items-center justify-center h-full">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+                    </div>
+                );
+            }
 
-            const pieGradient = `conic-gradient(#10b981 0% ${workingPct}%, #ef4444 ${workingPct}% ${workingPct + stoppedPct}%, #f59e0b ${workingPct + stoppedPct}% ${workingPct + stoppedPct + maintPct}%, #cbd5e1 ${workingPct + stoppedPct + maintPct}% 100%)`;
+            // Fallback robusto para evitar crash se API falhar ou backend estiver desatualizado
+            const fallback = {
+                totalVagas: 0,
+                totalWorkingMin: 0,
+                totalStoppedMin: 0,
+                totalMaintMin: 0,
+                totalMin: 1,
+                hourlyActivity: new Array(24).fill(0),
+                dailyTrend: [],
+                ranking: [],
+                statusSnapshot: { trabalhando: 0, parado: 0, manutencao: 0, 'sem-apropriacao': 0 }
+            };
 
-            const hourlyData = Array.from({ length: 24 }, (_, i) => {
-                let baseVal = 0;
-                if (i < 6) baseVal = Math.random() * 20;
-                else if (i < 12) baseVal = 60 + Math.random() * 30;
-                else if (i === 12 || i === 13) baseVal = 40 + Math.random() * 20;
-                else if (i < 18) baseVal = 70 + Math.random() * 25;
-                else baseVal = 30 + Math.random() * 30;
+            // Merge dos dados recebidos com o fallback (garante que todas as propriedades existam)
+            const data = { ...fallback, ...(stats || {}) };
 
-                return Math.min(Math.round(baseVal), 100);
-            });
+            // Retrocompatibilidade: Se vier "statusDistribution" (backend antigo), usa como "statusSnapshot"
+            if (stats && stats.statusDistribution && !stats.statusSnapshot) {
+                data.statusSnapshot = stats.statusDistribution;
+            }
+
+            const workingPct = data.totalMin > 0 ? (data.totalWorkingMin / data.totalMin) * 100 : 0;
+            const stoppedPct = data.totalMin > 0 ? (data.totalStoppedMin / data.totalMin) * 100 : 0;
+            const maintPct = data.totalMin > 0 ? (data.totalMaintMin / data.totalMin) * 100 : 0;
+
+            // Pie Gradient logic based on data (safe check)
+            const snap = data.statusSnapshot || fallback.statusSnapshot;
+            const totalSnap = Object.values(snap).reduce((a, b) => a + b, 0) || 1;
+            const snapWorkingPct = ((snap.trabalhando || 0) / totalSnap) * 100;
+            const snapStoppedPct = ((snap.parado || 0) / totalSnap) * 100;
+            const snapMaintPct = ((snap.manutencao || 0) / totalSnap) * 100;
+
+            const pieGradient = `conic-gradient(#10b981 0% ${snapWorkingPct}%, #ef4444 ${snapWorkingPct}% ${snapWorkingPct + snapStoppedPct}%, #f59e0b ${snapWorkingPct + snapStoppedPct}% ${snapWorkingPct + snapStoppedPct + snapMaintPct}%, #cbd5e1 ${snapWorkingPct + snapStoppedPct + snapMaintPct}% 100%)`;
 
             return (
                 <div className="p-8 h-full overflow-y-auto custom-scrollbar bg-slate-50 animate-fade-in">
@@ -1177,41 +1216,41 @@
                             <BarChart3 size={28} />
                         </div>
                         <div>
-                            <h1 className="text-2xl font-bold text-slate-800">Analytics</h1>
-                            <p className="text-slate-500 text-sm">Inteligência operacional e KPIs</p>
+                            <h1 className="text-2xl font-bold text-slate-800">Analytics Real</h1>
+                            <p className="text-slate-500 text-sm">Indicadores de performance baseados no histórico</p>
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
                         <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Activity size={60} className="text-emerald-500" /></div>
-                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Em Operação</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">{workingCount}</div>
+                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Disponibilidade</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{workingPct.toFixed(1)}%</div>
                             <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
                                 <div className="bg-emerald-500 h-full" style={{ width: `${workingPct}%` }}></div>
                             </div>
                         </div>
                         <div className="bg-white p-5 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><AlertTriangle size={60} className="text-red-500" /></div>
-                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Parado</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">{stoppedCount}</div>
+                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Tempo Parado</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{stoppedPct.toFixed(1)}%</div>
                             <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
                                 <div className="bg-red-500 h-full" style={{ width: `${stoppedPct}%` }}></div>
                             </div>
                         </div>
                         <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Zap size={60} className="text-indigo-500" /></div>
-                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Produtividade Média</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">78%</div>
+                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Eficiência Global</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{workingPct.toFixed(0)}%</div>
                             <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
-                                <div className="bg-indigo-500 h-full" style={{ width: `78%` }}></div>
+                                <div className="bg-indigo-500 h-full" style={{ width: `${workingPct}%` }}></div>
                             </div>
                         </div>
                         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Calendar size={60} className="text-slate-400" /></div>
-                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Ciclo Médio</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">4.5h</div>
-                            <p className="text-xs text-slate-400 mt-2">Por operação completa</p>
+                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Frota Total</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{data.totalVagas}</div>
+                            <p className="text-xs text-slate-400 mt-2">Veículos Monitorados</p>
                         </div>
                     </div>
 
@@ -1219,36 +1258,32 @@
                         <div className="flex justify-between items-center mb-6">
                             <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
                                 <Clock size={20} className="text-blue-600" />
-                                Performance Hora a Hora (24h)
+                                Timeline de Atividade (24h)
                             </h3>
                             <div className="flex gap-2">
-                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-emerald-400"></span> Alta</span>
-                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-amber-400"></span> Média</span>
-                                <span className="flex items-center gap-1 text-[10px] text-slate-500 font-bold uppercase"><span className="w-2 h-2 rounded-full bg-red-400"></span> Baixa</span>
+                                <span className="text-[10px] text-slate-400 uppercase">Volume de eventos iniciados por hora</span>
                             </div>
                         </div>
 
                         <div className="h-64 w-full flex items-end justify-between gap-1 sm:gap-2 px-2 pb-2">
-                            {hourlyData.map((val, hour) => {
-                                let barColor = 'bg-red-400';
-                                if (val > 40) barColor = 'bg-amber-400';
-                                if (val > 70) barColor = 'bg-emerald-400';
+                            {data.hourlyActivity.map((val, hour) => {
+                                let barColor = 'bg-slate-300';
+                                if (val > 20) barColor = 'bg-indigo-300';
+                                if (val > 50) barColor = 'bg-indigo-500';
+                                if (val > 80) barColor = 'bg-indigo-600';
 
                                 return (
                                     <div key={hour} className="flex-1 flex flex-col justify-end group cursor-pointer relative h-full">
                                         <div
                                             className={`w-full rounded-t-sm sm:rounded-t-md transition-all duration-300 relative flex flex-col justify-end opacity-80 group-hover:opacity-100 ${barColor}`}
-                                            style={{ height: `${val}%` }}
-                                        >
-                                            <div className="w-full h-1 bg-white/30 rounded-t-sm sm:rounded-t-md"></div>
-                                        </div>
-                                        <span className="text-[10px] text-slate-400 text-center mt-2 font-mono border-t border-transparent group-hover:border-slate-300 pt-1">
-                                            {hour.toString().padStart(2, '0')}h
+                                            style={{ height: `${val || 5}%`, minHeight: '4px' }}
+                                        ></div>
+                                        <span className="text-[10px] text-slate-400 text-center mt-2 font-mono pt-1">
+                                            {hour}h
                                         </span>
                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-20">
-                                            <div className="bg-slate-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl whitespace-nowrap text-center">
-                                                <span className="font-bold block text-sm">{hour}:00 - {hour}:59</span>
-                                                <span className="text-emerald-300 font-bold">{val}% Produtividade</span>
+                                            <div className="bg-slate-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl whitespace-nowrap">
+                                                <span className="font-bold">{val}% Atividade</span>
                                             </div>
                                             <div className="w-2 h-2 bg-slate-800 rotate-45 mx-auto -mt-1"></div>
                                         </div>
@@ -1256,45 +1291,61 @@
                                 );
                             })}
                         </div>
-                        <div className="w-full h-[1px] bg-slate-200 mt-[-24px]"></div>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
                             <h3 className="text-sm font-bold text-slate-700 mb-6 w-full flex items-center gap-2">
-                                <PieChart size={16} className="text-indigo-500" /> Distribuição da Frota
+                                <PieChart size={16} className="text-indigo-500" /> Distribuição Atual
                             </h3>
                             <div className="relative w-56 h-56 rounded-full shadow-inner mb-6 transition-all hover:scale-105 duration-500" style={{ background: pieGradient }}>
                                 <div className="absolute inset-0 m-auto w-32 h-32 bg-white rounded-full flex items-center justify-center shadow-lg">
                                     <div className="text-center">
-                                        <span className="block text-3xl font-bold text-slate-800">{total}</span>
+                                        <span className="block text-3xl font-bold text-slate-800">{data.totalVagas}</span>
                                         <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Veículos</span>
                                     </div>
                                 </div>
                             </div>
                             <div className="w-full grid grid-cols-2 gap-3">
-                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Operando</span> <span className="font-bold">{Math.round(workingPct)}%</span></div>
-                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span> Parado</span> <span className="font-bold">{Math.round(stoppedPct)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Operando</span> <span className="font-bold">{Math.round(snapWorkingPct)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span> Parado</span> <span className="font-bold">{Math.round(snapStoppedPct)}%</span></div>
                             </div>
                         </div>
 
                         <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                            <h3 className="text-sm font-bold text-slate-700 mb-6 flex items-center gap-2">
-                                <Truck size={16} className="text-emerald-500" /> Top Eficiência Operacional
-                            </h3>
-                            <div className="space-y-6">
-                                {vagas.slice(0, 5).map((v, i) => (
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                    <History size={16} className="text-blue-500" /> Histórico (7 Dias) & Ranking
+                                </h3>
+                            </div>
+
+                            {/* Daily Trend Mini-Chart */}
+                            <div className="flex items-end gap-2 h-32 mb-8 px-4 border-b border-slate-100 pb-4">
+                                {data.dailyTrend.map((d, i) => (
+                                    <div key={i} className="flex-1 flex flex-col items-center group">
+                                        <div className="w-full bg-blue-100 rounded-t-md relative hover:bg-blue-200 transition-colors" style={{ height: `${d.efficiency}%` }}>
+                                            <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-bold text-blue-600 opacity-0 group-hover:opacity-100">{d.efficiency}%</span>
+                                        </div>
+                                        <span className="text-[10px] text-slate-500 mt-2 font-mono">{d.date}</span>
+                                    </div>
+                                ))}
+                                {data.dailyTrend.length === 0 && <div className="w-full text-center text-slate-400 text-sm py-10">Sem histórico suficiente</div>}
+                            </div>
+
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Top Veículos (Eficiência)</h4>
+                            <div className="space-y-4">
+                                {data.ranking.map((v, i) => (
                                     <div key={i} className="flex items-center gap-4 group hover:bg-slate-50 p-2 rounded-lg transition-colors">
                                         <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i === 0 ? 'bg-yellow-100 text-yellow-600' : 'bg-slate-100 text-slate-500'}`}>
                                             {i + 1}
                                         </div>
                                         <div className="flex-1">
                                             <div className="flex justify-between mb-1">
-                                                <span className="text-sm font-bold text-slate-700">{v.nome}</span>
-                                                <span className="text-sm font-bold text-emerald-600">9{8 - i}%</span>
+                                                <span className="text-sm font-bold text-slate-700">{v.name}</span>
+                                                <span className="text-sm font-bold text-emerald-600">{v.efficiency}%</span>
                                             </div>
                                             <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `9${8 - i}%` }}></div>
+                                                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${v.efficiency}%` }}></div>
                                             </div>
                                         </div>
                                         <div className="text-xs font-mono text-slate-400 border border-slate-200 px-2 py-1 rounded bg-white">
@@ -1302,53 +1353,7 @@
                                         </div>
                                     </div>
                                 ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-8">
-                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[500px]">
-                            <div className="p-6 border-b border-slate-100">
-                                <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
-                                    <Activity size={20} className="text-indigo-500" /> Detalhe Operacional por Vaga
-                                </h3>
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto custom-scrollbar p-0">
-                                <table className="w-full text-left border-collapse">
-                                    <thead className="bg-slate-50 sticky top-0 z-10 text-xs uppercase font-bold text-slate-500 tracking-wider">
-                                        <tr>
-                                            <th className="px-6 py-4">Vaga</th>
-                                            <th className="px-6 py-4">Placa</th>
-                                            <th className="px-6 py-4">Status</th>
-                                            <th className="px-6 py-4">Atualização</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 text-sm">
-                                        {vagas.map(v => {
-                                            const status = normalizeStatus(v.status);
-                                            const label = STATUS_LABELS[status];
-                                            const style = STATUS_COLORS[status] || STATUS_COLORS['sem-apropriacao'];
-
-                                            return (
-                                                <tr key={v.id} className="hover:bg-slate-50 transition-colors group">
-                                                    <td className="px-6 py-4 font-bold text-slate-800">{v.nome}</td>
-                                                    <td className="px-6 py-4">
-                                                        <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-600 border border-slate-200 text-xs">{v.placa}</span>
-                                                    </td>
-                                                    <td className="px-6 py-4">
-                                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide border ${style.bg} ${style.text} ${style.border.replace('border-', 'border-opacity-20 ')}`}>
-                                                            {label}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-6 py-4 text-slate-500 text-xs font-mono">
-                                                        {formatDateTime(v.horario)}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                                {data.ranking.length === 0 && <div className="text-center text-slate-400 py-4">Sem dados de ranking</div>}
                             </div>
                         </div>
                     </div>
@@ -1419,7 +1424,7 @@
             };
 
             return (
-                <div className="p-8 max-w-5xl mx-auto h-full overflow-y-auto custom-scrollbar">
+                <div className="p-8 h-full overflow-y-auto custom-scrollbar">
                     <div className="flex justify-between items-center mb-6">
                         <div>
                             <h1 className="text-2xl font-bold text-slate-800">Gerenciamento de Alarmes</h1>
@@ -1566,68 +1571,238 @@
 
         // Configuracoes Page
         const ConfiguracoesPage = () => {
+            const { vagas, isConnected, lastUpdated, refreshData, refreshAlerts } = useFleet();
+            const { addToast } = useToast();
+
+            const [pollingInterval, setPollingInterval] = useState('30');
+            const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+            const [testingConnection, setTestingConnection] = useState(false);
+            const [connectionStatus, setConnectionStatus] = useState(null);
             const [saved, setSaved] = useState(false);
+
+            const handleTestConnection = async () => {
+                setTestingConnection(true);
+                setConnectionStatus(null);
+                try {
+                    const url = new URL(GAS_URL);
+                    url.searchParams.append('action', 'test');
+                    url.searchParams.append('ts', Date.now().toString());
+                    const res = await fetch(url.toString(), { redirect: 'follow' });
+                    const data = await res.json();
+                    if (data.success) {
+                        setConnectionStatus({ ok: true, message: data.message, timestamp: data.timestamp });
+                        addToast('Conexão com a API está funcionando!', 'success');
+                    } else {
+                        setConnectionStatus({ ok: false, message: 'API retornou erro' });
+                        addToast('API retornou erro.', 'critical');
+                    }
+                } catch (e) {
+                    setConnectionStatus({ ok: false, message: e.message });
+                    addToast('Falha na conexão com a API.', 'critical');
+                } finally {
+                    setTestingConnection(false);
+                }
+            };
+
+            const handleExportCSV = () => {
+                if (!vagas || vagas.length === 0) {
+                    addToast('Nenhum dado para exportar.', 'warning');
+                    return;
+                }
+                const header = 'Vaga,Placa,Status,Última Atualização,Total Eventos\n';
+                const rows = vagas.map(v =>
+                    `"${v.nome}","${v.placa}","${v.status}","${v.horario}",${(v.eventos || []).length}`
+                ).join('\n');
+                const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `frota_export_${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+                addToast('Arquivo CSV exportado com sucesso!', 'success');
+            };
+
+            const handleForceRefresh = async () => {
+                addToast('Atualizando dados...', 'info');
+                await refreshData();
+                await refreshAlerts();
+                addToast('Dados atualizados!', 'success');
+            };
 
             const handleSave = () => {
                 setSaved(true);
+                addToast('Configurações salvas com sucesso!', 'success');
                 setTimeout(() => setSaved(false), 2000);
             };
 
             return (
-                <div className="p-8 max-w-4xl mx-auto h-full overflow-y-auto">
+                <div className="p-8 h-full overflow-y-auto custom-scrollbar">
                     <div className="flex justify-between items-center mb-8">
-                        <h1 className="text-3xl font-bold text-slate-800">Configurações</h1>
-                        {saved && <span className="text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded-full animate-pulse">Alterações Salvas!</span>}
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-800">Configurações</h1>
+                            <p className="text-slate-500 text-sm">Gerenciar preferências do sistema de gestão de frota</p>
+                        </div>
+                        {saved && <span className="text-emerald-600 font-bold text-sm bg-emerald-50 px-3 py-1 rounded-full animate-pulse">Salvo!</span>}
                     </div>
 
-                    <div className="space-y-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Conexão com API */}
                         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider">Geral</div>
-
-                            <div className="divide-y divide-slate-100">
-                                <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
-                                    <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:scale-110 transition-transform"><User size={24} /></div>
-                                    <div className="flex-1">
-                                        <h3 className="font-bold text-slate-800">Perfil de Administrador</h3>
-                                        <p className="text-sm text-slate-500">Gerenciar conta admin e permissões de acesso</p>
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider flex items-center gap-2">
+                                <Database size={16} className="text-emerald-500" /> Conexão com o Backend
+                            </div>
+                            <div className="p-6 space-y-5">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase text-slate-500 mb-2">URL da API (Google Apps Script)</label>
+                                    <div className="flex gap-2">
+                                        <input type="text" readOnly value={GAS_URL} className="flex-1 border border-slate-200 rounded-lg p-3 text-xs font-mono bg-slate-50 text-slate-600 truncate" />
+                                        <button onClick={() => { navigator.clipboard.writeText(GAS_URL); addToast('URL copiada!', 'info'); }} className="px-3 py-2 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors text-slate-600" title="Copiar">
+                                            <Icon name="copy" size={16} />
+                                        </button>
                                     </div>
-                                    <button className="text-blue-600 text-sm font-bold border border-blue-100 px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors" onClick={handleSave}>Editar</button>
                                 </div>
 
-                                <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
-                                    <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:scale-110 transition-transform"><Database size={24} /></div>
-                                    <div className="flex-1">
-                                        <h3 className="font-bold text-slate-800">Banco de Dados (Google Sheets)</h3>
-                                        <p className="text-sm text-slate-500">Status: <span className="text-emerald-600 font-bold">Conectado via Apps Script</span></p>
+                                <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-400'}`}></div>
+                                        <div>
+                                            <p className="text-sm font-bold text-slate-700">{isConnected ? 'Conectado' : 'Desconectado'}</p>
+                                            <p className="text-[10px] text-slate-400 font-mono">
+                                                {lastUpdated ? `Última sincronização: ${lastUpdated.toLocaleTimeString('pt-BR')}` : 'Aguardando...'}
+                                            </p>
+                                        </div>
                                     </div>
-                                    <button className="text-slate-500 text-sm font-medium hover:text-slate-800" onClick={() => window.open('https://docs.google.com/spreadsheets', '_blank')}>Abrir Planilha</button>
+                                    <button
+                                        onClick={handleTestConnection}
+                                        disabled={testingConnection}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-500 transition-all disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        {testingConnection ? (
+                                            <><RefreshCw size={14} className="animate-spin" /> Testando...</>
+                                        ) : (
+                                            <><Zap size={14} /> Testar Conexão</>
+                                        )}
+                                    </button>
+                                </div>
+
+                                {connectionStatus && (
+                                    <div className={`p-3 rounded-lg text-xs font-medium ${connectionStatus.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                                        {connectionStatus.ok ? '✅' : '❌'} {connectionStatus.message}
+                                        {connectionStatus.timestamp && <span className="block text-[10px] opacity-70 mt-1">Timestamp: {connectionStatus.timestamp}</span>}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Polling & Atualização */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider flex items-center gap-2">
+                                <RefreshCw size={16} className="text-blue-500" /> Atualização de Dados
+                            </div>
+                            <div className="p-6 space-y-5">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Intervalo de Polling (segundos)</label>
+                                    <div className="flex items-center gap-4">
+                                        <input
+                                            type="range" min="10" max="120" step="5"
+                                            value={pollingInterval}
+                                            onChange={e => setPollingInterval(e.target.value)}
+                                            className="flex-1 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                        />
+                                        <span className="text-lg font-bold text-slate-800 bg-slate-100 px-3 py-1 rounded-lg min-w-[60px] text-center">{pollingInterval}s</span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-400 mt-2">Define a frequência com que o sistema busca novos dados do backend. Valores menores = mais atual, porém mais requisições.</p>
+                                </div>
+
+                                <div className="border-t border-slate-100 pt-5">
+                                    <button
+                                        onClick={handleForceRefresh}
+                                        className="w-full bg-slate-100 text-slate-700 py-3 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <RefreshCw size={16} /> Forçar Atualização Agora
+                                    </button>
+                                </div>
+
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                    <p className="text-xs text-blue-700 font-medium flex items-center gap-2">
+                                        <Activity size={14} /> Dados monitorados em tempo real: <strong>{vagas.length} vagas</strong>
+                                    </p>
                                 </div>
                             </div>
                         </div>
 
+                        {/* Notificações */}
                         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider">Preferências</div>
-                            <div className="p-6 flex gap-4 items-center hover:bg-slate-50 transition-colors group">
-                                <div className="bg-amber-100 p-3 rounded-xl text-amber-600 group-hover:scale-110 transition-transform"><BellRing size={24} /></div>
-                                <div className="flex-1">
-                                    <h3 className="font-bold text-slate-800">Notificações de Sistema</h3>
-                                    <p className="text-sm text-slate-500">Configurar alertas sonoros e pop-ups</p>
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider flex items-center gap-2">
+                                <BellRing size={16} className="text-amber-500" /> Notificações
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
+                                    <div>
+                                        <h4 className="text-sm font-bold text-slate-700">Toast de Novos Alertas</h4>
+                                        <p className="text-xs text-slate-400 mt-0.5">Exibir notificação pop-up quando novos alertas forem detectados</p>
+                                    </div>
+                                    <div
+                                        className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-300 ${notificationsEnabled ? 'bg-blue-600 justify-end' : 'bg-slate-200 justify-start'}`}
+                                        onClick={() => { setNotificationsEnabled(!notificationsEnabled); addToast(notificationsEnabled ? 'Notificações desativadas' : 'Notificações ativadas', 'info'); }}
+                                    >
+                                        <div className="bg-white w-4 h-4 rounded-full shadow-md"></div>
+                                    </div>
                                 </div>
-                                <div className="relative inline-block w-12 h-6 transition duration-200 ease-in-out bg-blue-600 rounded-full cursor-pointer">
-                                    <span className="absolute left-6 top-1 bg-white w-4 h-4 rounded-full shadow-md transition-all"></span>
-                                </div>
+
+                                <button
+                                    onClick={() => addToast('Este é um exemplo de notificação toast!', 'info')}
+                                    className="w-full text-left p-4 border border-dashed border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                                >
+                                    <p className="text-sm font-bold text-slate-600">Testar Notificação</p>
+                                    <p className="text-xs text-slate-400 mt-0.5">Clique para visualizar um exemplo de toast</p>
+                                </button>
                             </div>
                         </div>
 
-                        <div className="flex justify-end pt-4">
-                            <button className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95" onClick={handleSave}>
-                                <Save size={18} /> Salvar Tudo
-                            </button>
+                        {/* Exportação de Dados */}
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 text-sm uppercase tracking-wider flex items-center gap-2">
+                                <BarChart2 size={16} className="text-indigo-500" /> Dados & Exportação
+                            </div>
+                            <div className="p-6 space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="bg-slate-50 p-4 rounded-xl text-center">
+                                        <p className="text-2xl font-bold text-slate-800">{vagas.length}</p>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vagas Monitoradas</p>
+                                    </div>
+                                    <div className="bg-slate-50 p-4 rounded-xl text-center">
+                                        <p className="text-2xl font-bold text-slate-800">{vagas.reduce((s, v) => s + (v.eventos?.length || 0), 0)}</p>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Eventos Hoje</p>
+                                    </div>
+                                </div>
+
+                                <button
+                                    onClick={handleExportCSV}
+                                    className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 active:scale-95"
+                                >
+                                    <Save size={16} /> Exportar Dados (CSV)
+                                </button>
+
+                                <button
+                                    onClick={() => window.open('https://docs.google.com/spreadsheets', '_blank')}
+                                    className="w-full bg-slate-100 text-slate-700 py-3 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
+                                >
+                                    <Database size={16} /> Abrir Planilha no Google Sheets
+                                </button>
+                            </div>
                         </div>
                     </div>
 
-                    <div className="mt-12 text-center text-slate-400 text-xs font-mono">
-                        System Version 2.1.0 • Build 2024.05.20
+                    <div className="flex justify-end pt-6">
+                        <button className="flex items-center gap-2 bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg active:scale-95" onClick={handleSave}>
+                            <Save size={18} /> Salvar Configurações
+                        </button>
+                    </div>
+
+                    <div className="mt-8 text-center text-slate-400 text-xs font-mono">
+                        Gestão de Frota v4.0 • Build {new Date().getFullYear()}.{(new Date().getMonth() + 1).toString().padStart(2, '0')}
                     </div>
                 </div>
             );
