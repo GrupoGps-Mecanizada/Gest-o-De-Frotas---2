@@ -421,13 +421,31 @@
         // CONSTANTS & UTILITIES
         // ============================================
 
-        const GAS_URL = 'https://script.google.com/macros/s/AKfycbyyFOasW2D6TAOMqUeqaYzkUKbkn7yTmRG3mtxZeXyl2mOz6pGyYto0Un8-48WYlvrmoQ/exec';
+        const GAS_URL = 'https://script.google.com/macros/s/AKfycbypH53_RuSyry7t2KkRMH5Mbx7jobNiJlAAK0kTfr9mWonLQVM3Gytc7O0yu82NJGuSBg/exec';
 
         const STATUS_COLORS = {
-            trabalhando: { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-500', icon: 'bg-emerald-500' },
-            parado: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-500', icon: 'bg-red-500' },
-            manutencao: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-500', icon: 'bg-amber-500' },
-            'sem-apropriacao': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' }
+            'motor ligado': { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-500', icon: 'bg-green-600' },
+            'trabalhando': { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-500', icon: 'bg-green-600' },
+            'motor secundário ligado': { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-500', icon: 'bg-emerald-400' },
+            'motor desligado': { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-500', icon: 'bg-red-600' },
+            'parado ligado': { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-500', icon: 'bg-yellow-400' },
+            'parado': { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-500', icon: 'bg-yellow-400' },
+            'em manutenção': { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-500', icon: 'bg-orange-500' },
+            'fora da planta': { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-600', icon: 'bg-amber-700' },
+            'indisponível / sem apropriação': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
+            'indisponível': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
+            'sem apropriação': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
+            'troca de turno': { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-500', icon: 'bg-blue-500' },
+            'fora do regime': { bg: 'bg-white', text: 'text-slate-600', border: 'border-slate-300', icon: 'bg-slate-100' },
+            'sem dados de bordo': { bg: 'bg-slate-200', text: 'text-slate-800', border: 'border-slate-600', icon: 'bg-slate-900' },
+            'parada apontada': { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-500', icon: 'bg-indigo-900' },
+            'vaga disponível': { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-500', icon: 'bg-purple-600' },
+            'chave geral desligada': { bg: 'bg-teal-100', text: 'text-teal-700', border: 'border-teal-500', icon: 'bg-teal-600' },
+            'documentação': { bg: 'bg-cyan-100', text: 'text-cyan-700', border: 'border-cyan-500', icon: 'bg-cyan-600' },
+            'abastecimento': { bg: 'bg-lime-100', text: 'text-lime-700', border: 'border-lime-500', icon: 'bg-lime-600' },
+            'refeição motorista': { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-500', icon: 'bg-rose-500' },
+            'refeição': { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-500', icon: 'bg-rose-500' },
+            'default': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' }
         };
 
         const STATUS_LABELS = {
@@ -438,11 +456,36 @@
         };
 
         const normalizeStatus = (rawStatus) => {
-            const s = rawStatus?.toLowerCase() || '';
-            if (s.includes('trabalhando') || s.includes('ligado') || s.includes('operando')) return 'trabalhando';
-            if (s.includes('parado') || s.includes('desligado')) return 'parado';
-            if (s.includes('manutenção') || s.includes('manutencao')) return 'manutencao';
-            return 'sem-apropriacao';
+            if (!rawStatus) return 'default';
+            const s = rawStatus.toLowerCase().trim();
+
+            // Mapeamento completo baseado em todos os status do GaussFleet
+            if (s.includes('motor secundário')) return 'motor secundário ligado';
+            if (s === 'motor ligado' || s === 'trabalhando' || s === 'operando') return 'motor ligado';
+            if (s === 'motor desligado') return 'motor desligado';
+            if (s === 'parado ligado') return 'parado ligado';
+            if (s === 'parado' || s === 'ocioso') return 'parado';
+            if (s.includes('manutenção') || s.includes('manutencao')) return 'em manutenção';
+            if (s === 'fora da planta') return 'fora da planta';
+            if (s.includes('indisponível') && s.includes('sem apropriação')) return 'indisponível / sem apropriação';
+            if (s === 'indisponível' || s === 'indisponivel') return 'indisponível';
+            if (s === 'sem apropriação' || s === 'sem apropriacao') return 'sem apropriação';
+            if (s === 'troca de turno') return 'troca de turno';
+            if (s === 'fora do regime') return 'fora do regime';
+            if (s === 'sem dados de bordo') return 'sem dados de bordo';
+            if (s === 'parada apontada') return 'parada apontada';
+            if (s === 'vaga disponível' || s === 'vaga disponivel') return 'vaga disponível';
+            if (s === 'chave geral desligada') return 'chave geral desligada';
+            if (s.includes('documentação') || s.includes('documentacao')) return 'documentação';
+            if (s.includes('abastecimento')) return 'abastecimento';
+            if (s.includes('refeição') || s.includes('refeicao')) return 'refeição';
+
+            // Fallback para parciais se não houver match exato
+            if (s.includes('ligado')) return 'motor ligado';
+            if (s.includes('desligado')) return 'motor desligado';
+            if (s.includes('parad')) return 'parado';
+
+            return 'default';
         };
 
         const formatDateTime = (dateString) => {
@@ -465,9 +508,13 @@
         };
 
         const timeToMinutes = (timeStr) => {
-            if (!timeStr || !timeStr.includes(':')) return 0;
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            return (hours * 60) + (minutes || 0);
+            if (!timeStr) return 0;
+            const match = timeStr.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+            if (!match) return 0;
+            const hours = parseInt(match[1]);
+            const minutes = parseInt(match[2]);
+            const seconds = match[3] ? parseInt(match[3]) : 0;
+            return (hours * 60) + minutes + (seconds / 60);
         };
 
         const calculateDuration = (startStr, endStr) => {
@@ -665,65 +712,10 @@
             }
 
             startSimulation() {
-                this.intervalId = setInterval(() => {
-                    if (!this.mockEquipments.length) return;
-
-                    const randomIndex = Math.floor(Math.random() * this.mockEquipments.length);
-                    const eq = this.mockEquipments[randomIndex];
-
-                    const statuses = ['Trabalhando', 'Parado', 'Manutenção'];
-                    const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
-
-                    if (eq.status === newStatus) return;
-
-                    const now = new Date();
-                    const timeString = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-
-                    let updatedEventos = [...eq.eventos];
-
-                    if (updatedEventos.length > 0) {
-                        const lastEventIndex = updatedEventos.length - 1;
-                        const lastEvent = { ...updatedEventos[lastEventIndex] };
-                        lastEvent.dataFim = timeString;
-
-                        if (lastEvent.dataInicio) {
-                            lastEvent.tempoTotal = calculateDuration(lastEvent.dataInicio, timeString);
-                        }
-
-                        updatedEventos[lastEventIndex] = lastEvent;
-                    }
-
-                    const newEvent = {
-                        descricao: `Mudança para ${newStatus}`,
-                        dataInicio: timeString,
-                        dataFim: undefined,
-                        tempoTotal: '00:00',
-                        status: newStatus
-                    };
-
-                    updatedEventos.push(newEvent);
-
-                    if (updatedEventos.length > 10) {
-                        updatedEventos = updatedEventos.slice(-10);
-                    }
-
-                    const updatedEquipment = {
-                        ...eq,
-                        status: newStatus,
-                        horario: now.toISOString(),
-                        eventos: updatedEventos
-                    };
-
-                    this.mockEquipments[randomIndex] = updatedEquipment;
-
-                    const message = {
-                        type: 'UPDATE',
-                        payload: updatedEquipment,
-                        timestamp: Date.now()
-                    };
-
-                    this.notify(message);
-                }, 5000);
+                // DESATIVADO: A simulação mock gerava status aleatórios falsos
+                // ('Trabalhando', 'Parado', 'Manutenção') a cada 5s, sobrescrevendo
+                // os dados reais da API. Mantido como stub para futura telemetria real.
+                console.log('[WebSocket] Simulação mock desativada - usando apenas dados reais da API');
             }
         }
 
@@ -868,7 +860,15 @@
                                     vaga.eventos,
                                     vaga.nome
                                 );
-                                return { ...vaga, eventos: resolvedEvents };
+                                // Atualizar status e horário com base no último evento resolvido
+                                const lastEvent = resolvedEvents[resolvedEvents.length - 1];
+                                return {
+                                    ...vaga,
+                                    eventos: resolvedEvents,
+                                    // SOBRESCREVE o status bruto do backend com o status processado
+                                    status: lastEvent ? lastEvent.descricao : vaga.status,
+                                    horario: lastEvent ? (lastEvent.dataFim || lastEvent.dataInicio) : vaga.horario
+                                };
                             }
                             return vaga;
                         });
@@ -879,7 +879,7 @@
                         setVagas(processedVagas);
                         setLastUpdated(new Date());
                         setIsConnected(true);
-                        socketService.connect(processedVagas);
+                        // REMOVIDO: socketService.connect(processedVagas) - iniciava simulação mock que corrompia dados
 
                         // Log de estatísticas
                         const stats = conflictResolver.getStats();
@@ -942,26 +942,13 @@
                 }, 30000);
 
                 // Socket subscription (simulated)
-                const unsubscribe = socketService.subscribe((msg) => {
-                    if (msg.type === 'CONNECTION') {
-                        setIsConnected(msg.payload.status === 'connected');
-                    } else if (msg.type === 'UPDATE') {
-                        const updatedEquip = msg.payload;
-                        setVagas(currentVagas => {
-                            const exists = currentVagas.some(v => v.id === updatedEquip.id);
-                            if (exists) {
-                                return currentVagas.map(v => v.id === updatedEquip.id ? updatedEquip : v);
-                            }
-                            return currentVagas;
-                        });
-                        setLastUpdated(new Date());
-                    }
-                });
+                // REMOVIDO: Socket subscription que sobrescrevia dados reais com mock
+                // Quando houver telemetria real via WebSocket, reativar aqui
+                const unsubscribe = () => { };
 
                 return () => {
                     clearInterval(intervalId);
                     unsubscribe();
-                    socketService.disconnect();
                 };
             }, [filters]);
 
@@ -1073,11 +1060,22 @@
             );
         };
 
-        // Equipment Card Component
+        // Equipment Card Component (Deprecated in favor of TimelineRow, keeping for reference or alternative view if needed)
         const EquipmentCard = ({ data, onClick, isSelected }) => {
+            const [currentTimeStr, setCurrentTimeStr] = useState('');
+
+            useEffect(() => {
+                const updateTime = () => {
+                    setCurrentTimeStr(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+                };
+                updateTime();
+                const interval = setInterval(updateTime, 60000);
+                return () => clearInterval(interval);
+            }, []);
+
             const statusKey = normalizeStatus(data.status);
-            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['sem-apropriacao'];
-            const label = STATUS_LABELS[statusKey] || data.status;
+            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
+            const label = data.status || 'Sem Dados';
 
             return (
                 <div
@@ -1127,6 +1125,93 @@
             );
         };
 
+        // NEW: Timeline Row Component for List View
+        const TimelineRow = ({ data, onClick, isSelected, currentTimeStr }) => {
+            const statusKey = normalizeStatus(data.status);
+            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
+            const label = data.status || 'Sem Dados';
+            const events = data.eventos || [];
+
+            return (
+                <div
+                    onClick={() => onClick(data)}
+                    className={`bg-white border-b last:border-b-0 border-slate-100 hover:bg-slate-50 transition-colors p-3 flex items-center gap-4 cursor-pointer ${isSelected ? 'bg-blue-50/50' : ''}`}
+                >
+                    {/* Coluna 1: Identificação */}
+                    <div className="w-64 flex-shrink-0">
+                        <div className="flex items-center gap-2 mb-1">
+                            <Truck size={16} className="text-slate-400" />
+                            <h3 className="text-sm font-bold text-slate-800 truncate" title={data.nome}>{data.nome}</h3>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${style.icon}`}></span>
+                            <span className="text-xs text-slate-500 font-mono">{data.placa}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${style.bg} ${style.text} ${style.border} uppercase font-bold`}>
+                                {label}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* Coluna 2: Timeline 24h */}
+                    <div className="flex-1 h-8 bg-slate-100 rounded-md overflow-hidden flex relative min-w-[200px]">
+                        {events.length === 0 ? (
+                            <div className="w-full flex items-center justify-center text-[10px] text-slate-400">Sem eventos</div>
+                        ) : (
+                            events.map((evt, idx) => {
+                                const isLastEvent = idx === events.length - 1;
+                                let durationMins = 0;
+
+                                if (isLastEvent && !evt.dataFim) {
+                                    // Calcular até o momento atual
+                                    const start = timeToMinutes(evt.dataInicio);
+                                    const now = currentTimeStr ? timeToMinutes(currentTimeStr) : start + 1;
+                                    let diff = now - start;
+                                    if (diff < 0) diff += 1440;
+                                    durationMins = Math.max(diff, 0.5);
+                                } else {
+                                    durationMins = timeToMinutes(evt.tempoTotal);
+                                }
+
+                                const flexGrow = Math.max(durationMins, 0.01); // Garante que não quebre o flex
+                                const evtKey = normalizeStatus(evt.status || evt.descricao);
+                                const color = STATUS_COLORS[evtKey]?.icon.replace('bg-', 'bg-') || 'bg-slate-300';
+
+                                return (
+                                    <div
+                                        key={idx}
+                                        className={`${color} h-full border-r border-white/20 relative group`}
+                                        style={{ flexGrow: flexGrow }}
+                                        title={`${evt.descricao} (${evt.dataInicio} - ${evt.dataFim || 'Agora'})`}
+                                    >
+                                        {/* Tooltip on hover */}
+                                        <div className="hidden group-hover:block absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-[10px] px-2 py-1 rounded whitespace-nowrap shadow-lg">
+                                            {evt.descricao}
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        )}
+                        {/* Régua de Horas (Opcional, apenas marcações visuais) */}
+                        <div className="absolute inset-0 flex justify-between px-1 pointer-events-none">
+                            <div className="w-px h-2 bg-slate-300/50 mt-auto"></div> {/* 00:00 */}
+                            <div className="w-px h-2 bg-slate-300/50 mt-auto"></div> {/* 12:00 */}
+                            <div className="w-px h-2 bg-slate-300/50 mt-auto"></div> {/* 23:59 */}
+                        </div>
+                    </div>
+
+                    {/* Coluna 3: Tempo Atual */}
+                    <div className="w-24 text-right flex-shrink-0">
+                        <div className="text-xs font-bold text-slate-700">
+                            {events.length > 0 ? (events[events.length - 1].status || events[events.length - 1].descricao) : '--'}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                            {events.length > 0 ? events[events.length - 1].dataInicio : '--:--'}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         // Detail Panel Component
         const DetailPanel = ({ equipment, onClose }) => {
             const [showFullHistory, setShowFullHistory] = useState(false);
@@ -1145,8 +1230,8 @@
             if (!equipment) return null;
 
             const statusKey = normalizeStatus(equipment.status);
-            const label = STATUS_LABELS[statusKey];
-            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['sem-apropriacao'];
+            const label = equipment.status || 'Sem Dados';
+            const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
             const events = equipment.eventos || [];
 
             return (
@@ -1224,12 +1309,15 @@
                                         if (isLastEvent && !evt.dataFim && currentTimeStr) {
                                             const start = timeToMinutes(evt.dataInicio);
                                             const now = timeToMinutes(currentTimeStr);
-                                            durationMins = Math.max(now - start, 1);
+                                            let diff = now - start;
+                                            if (diff < 0) diff += 1440; // Ajuste para virada de dia
+                                            durationMins = Math.max(diff, 0.5);
                                         } else {
-                                            durationMins = timeToMinutes(formatDuration(evt.tempoTotal));
+                                            // Tenta usar o tempoTotal bruto para evitar truncamento de segundos
+                                            durationMins = timeToMinutes(evt.tempoTotal);
                                         }
 
-                                        const flexGrow = durationMins > 0 ? durationMins : 1;
+                                        const flexGrow = durationMins > 0 ? durationMins : 0.5;
 
                                         const evtKey = normalizeStatus(evt.status || evt.descricao);
                                         const color = STATUS_COLORS[evtKey]?.icon.replace('bg-', 'bg-') || 'bg-slate-300';
@@ -1435,20 +1523,32 @@
                         </div>
 
                         <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-6 pt-4">
-                            {loading && vagas.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                                    <RefreshCw className="animate-spin mb-4 text-blue-200" size={40} />
-                                    <p className="animate-pulse">Sincronizando frota...</p>
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+                                    <MonitorPlay size={20} className="text-blue-600" />
+                                    Painel de Monitoramento
+                                </h3>
+
+                                {filterText && (
+                                    <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                                        Filtro: {filterText} ({filteredVagas.length})
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Grid de Equipamentos */}
+                            {loading ? (
+                                <div className="flex items-center justify-center p-20">
+                                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
                                 </div>
                             ) : filteredVagas.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center py-20 bg-white rounded-xl border border-dashed border-slate-300">
-                                    <div className="bg-slate-50 p-4 rounded-full mb-3"><Filter size={24} className="text-slate-400" /></div>
-                                    <p className="text-slate-600 font-medium">Nenhum veículo encontrado.</p>
-                                    <p className="text-sm text-slate-400 mt-1">Tente ajustar os filtros de horário.</p>
+                                <div className="text-center p-10 text-slate-400">
+                                    <Truck size={48} className="mx-auto mb-3 opacity-20" />
+                                    <p>Nenhum veículo encontrado com os filtros atuais.</p>
                                     <button onClick={() => { setFilterText(''); updateFilters({ startTime: '', endTime: '' }); }} className="mt-4 text-blue-600 font-bold text-sm hover:underline">Limpar Filtros</button>
                                 </div>
                             ) : (
-                                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 ${selectedEquip ? 'xl:grid-cols-2' : 'xl:grid-cols-4'} gap-5 transition-all`}>
+                                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 ${selectedEquip ? 'xl:grid-cols-2' : 'xl:grid-cols-4'} gap-5 transition-all pb-20`}>
                                     {filteredVagas.map((vaga) => (
                                         <EquipmentCard
                                             key={vaga.id}
@@ -2181,7 +2281,7 @@
                     </div>
 
                     <div className="mt-8 text-center text-slate-400 text-xs font-mono">
-                        Gestão de Frota v4.0 • Build {new Date().getFullYear()}.{(new Date().getMonth() + 1).toString().padStart(2, '0')}
+                        Gestão de Frota v5.0 • Build {new Date().getFullYear()}.{(new Date().getMonth() + 1).toString().padStart(2, '0')}
                     </div>
                 </div>
             );
