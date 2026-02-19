@@ -455,17 +455,37 @@
             'sem-apropriacao': 'Sem Sinal'
         };
 
-        const normalizeStatus = (rawStatus) => {
+        const normalizeStatus = (rawStatus, equipmentName) => {
             if (!rawStatus) return 'default';
             const s = rawStatus.toLowerCase().trim();
+            const name = (equipmentName || "").toUpperCase();
 
-            // Mapeamento completo baseado em todos os status do GaussFleet
+            // 1. REGRA DE MANUTENÇÃO (Prioridade Máxima)
+            if (s.includes('manutenção') || s.includes('manutencao')) return 'em manutenção';
+
+            // 2. REGRA ESPECÍFICA: AUTO VÁCUO
+            if (name.includes('AUTO VÁCUO') || name.includes('AUTO VACUO')) {
+                // "Parado Ligado" é produtivo (sucção) -> Mapeia para working (motor ligado)
+                if (s.includes('parado ligado')) return 'motor ligado';
+                if (s.includes('motor ligado') || s.includes('trabalhando') || s.includes('operando')) return 'motor ligado';
+            }
+
+            // 3. REGRA ESPECÍFICA: ALTA PRESSÃO / HIPER VÁCUO
+            if (name.includes('ALTA PRESSÃO') || name.includes('ALTA PRESSAO') || name.includes('HIPER VÁCUO') || name.includes('HIPER VACUO')) {
+                // "Motor Secundário" é o único produtivo real
+                if (s.includes('motor secundário')) return 'motor secundário ligado';
+                // "Parado Ligado" é improdutivo (marcha lenta) -> Mapeia para idle (parado ligado)
+                if (s.includes('parado ligado')) return 'parado ligado';
+                // "Motor Ligado" sem secundário também é improdutivo
+                if (s === 'motor ligado') return 'parado ligado';
+            }
+
+            // 4. REGRAS GERAIS / FALLBACK
             if (s.includes('motor secundário')) return 'motor secundário ligado';
             if (s === 'motor ligado' || s === 'trabalhando' || s === 'operando') return 'motor ligado';
             if (s === 'motor desligado') return 'motor desligado';
             if (s === 'parado ligado') return 'parado ligado';
             if (s === 'parado' || s === 'ocioso') return 'parado';
-            if (s.includes('manutenção') || s.includes('manutencao')) return 'em manutenção';
             if (s === 'fora da planta') return 'fora da planta';
             if (s.includes('indisponível') && s.includes('sem apropriação')) return 'indisponível / sem apropriação';
             if (s === 'indisponível' || s === 'indisponivel') return 'indisponível';
@@ -988,6 +1008,7 @@
             const menuItems = [
                 { id: 'monitoramento', label: 'Monitoramento', icon: MonitorPlay },
                 { id: 'analytics', label: 'Dashboard', icon: BarChart3 },
+                { id: 'manutencao', label: 'Gestão de Manutenção', icon: AlertOctagon },
                 { id: 'alarmes', label: 'Alarmes', icon: Bell },
             ];
 
@@ -1073,7 +1094,7 @@
                 return () => clearInterval(interval);
             }, []);
 
-            const statusKey = normalizeStatus(data.status);
+            const statusKey = normalizeStatus(data.status, data.nome);
             const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
             const label = data.status || 'Sem Dados';
 
@@ -1127,7 +1148,7 @@
 
         // NEW: Timeline Row Component for List View
         const TimelineRow = ({ data, onClick, isSelected, currentTimeStr }) => {
-            const statusKey = normalizeStatus(data.status);
+            const statusKey = normalizeStatus(data.status, data.nome);
             const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
             const label = data.status || 'Sem Dados';
             const events = data.eventos || [];
@@ -1173,7 +1194,7 @@
                                 }
 
                                 const flexGrow = Math.max(durationMins, 0.01); // Garante que não quebre o flex
-                                const evtKey = normalizeStatus(evt.status || evt.descricao);
+                                const evtKey = normalizeStatus(evt.status || evt.descricao, data.nome);
                                 const color = STATUS_COLORS[evtKey]?.icon.replace('bg-', 'bg-') || 'bg-slate-300';
 
                                 return (
@@ -1229,7 +1250,7 @@
 
             if (!equipment) return null;
 
-            const statusKey = normalizeStatus(equipment.status);
+            const statusKey = normalizeStatus(equipment.status, equipment.nome);
             const label = equipment.status || 'Sem Dados';
             const style = STATUS_COLORS[statusKey] || STATUS_COLORS['default'];
             const events = equipment.eventos || [];
@@ -1319,7 +1340,7 @@
 
                                         const flexGrow = durationMins > 0 ? durationMins : 0.5;
 
-                                        const evtKey = normalizeStatus(evt.status || evt.descricao);
+                                        const evtKey = normalizeStatus(evt.status || evt.descricao, equipment.nome);
                                         const color = STATUS_COLORS[evtKey]?.icon.replace('bg-', 'bg-') || 'bg-slate-300';
 
                                         return (
@@ -1365,7 +1386,7 @@
                             <div className="space-y-0 relative border-l-2 border-slate-100 ml-2 pl-6 py-1">
                                 {events.slice().reverse().slice(0, 4).map((evt, idx) => {
                                     const isCurrent = idx === 0;
-                                    const status = normalizeStatus(evt.status || evt.descricao);
+                                    const status = normalizeStatus(evt.status || evt.descricao, equipment.nome);
                                     const isWorking = status === 'trabalhando';
 
                                     return (
@@ -1431,6 +1452,132 @@
                             </div>
                         </div>
                     )}
+                </div>
+            );
+        };
+
+        // ============================================
+        // MAINTENANCE TRACKER COMPONENT
+        // ============================================
+
+        const MaintenanceTracker = () => {
+            const { vagas } = useFleet();
+
+            const calculateStats = () => {
+                const stats = { totalTime: 0, totalWorking: 0, totalMaint: 0, rankingFreq: [], rankingTime: [] };
+                const maintMap = {};
+
+                vagas.forEach(v => {
+                    if (v.eventos) {
+                        v.eventos.forEach(evt => {
+                            const evtStatus = normalizeStatus(evt.status || evt.descricao, v.nome);
+                            const duration = timeToMinutes(evt.tempoTotal);
+                            stats.totalTime += duration;
+                            if (evtStatus === 'motor ligado' || evtStatus === 'motor secundário ligado') {
+                                stats.totalWorking += duration;
+                            }
+                            if (evtStatus === 'em manutenção') {
+                                stats.totalMaint += duration;
+                                if (!maintMap[v.nome]) maintMap[v.nome] = { name: v.nome, placa: v.placa, count: 0, time: 0 };
+                                maintMap[v.nome].count++;
+                                maintMap[v.nome].time += duration;
+                            }
+                        });
+                    }
+                });
+
+                stats.rankingFreq = Object.values(maintMap).sort((a, b) => b.count - a.count).slice(0, 10);
+                stats.rankingTime = Object.values(maintMap).sort((a, b) => b.time - a.time).slice(0, 10);
+                return stats;
+            };
+
+            const data = calculateStats();
+            const efficiency = data.totalTime > 0 ? ((data.totalWorking / data.totalTime) * 100).toFixed(1) : 0;
+            const maintPct = data.totalTime > 0 ? ((data.totalMaint / data.totalTime) * 100).toFixed(1) : 0;
+
+            return (
+                <div className="p-8 h-full overflow-y-auto custom-scrollbar bg-slate-50 animate-fade-in">
+                    <div className="flex items-center gap-4 mb-8">
+                        <div className="bg-amber-600 p-3 rounded-xl text-white shadow-lg shadow-amber-500/20">
+                            <AlertOctagon size={28} />
+                        </div>
+                        <div>
+                            <h1 className="text-2xl font-bold text-slate-800">Gestão de Manutenção</h1>
+                            <p className="text-slate-500 text-sm">Monitoramento de ativos em manutenção e eficiência real</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div className="bg-white p-6 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden">
+                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Eficiência Real (Produção)</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{efficiency}%</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
+                                <div className="bg-emerald-500 h-full" style={{ width: `${efficiency}%` }}></div>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2">Auto Vácuo (Sucção) + Alta Pressão (Motor Secundário)</p>
+                        </div>
+
+                        <div className="bg-white p-6 rounded-2xl border border-amber-100 shadow-sm relative overflow-hidden">
+                            <span className="text-xs font-bold text-amber-600 uppercase tracking-wider">Tempo em Manutenção</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{maintPct}%</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
+                                <div className="bg-amber-500 h-full" style={{ width: `${maintPct}%` }}></div>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-2">Percentual do tempo total da frota</p>
+                        </div>
+
+                        <div className="bg-white p-6 rounded-2xl border border-blue-100 shadow-sm relative overflow-hidden">
+                            <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Ativos Monitorados</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{vagas.length}</div>
+                            <p className="text-xs text-slate-400 mt-2">Total de equipamentos na base</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Ranking Frequência */}
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-700 mb-6 flex items-center gap-2">
+                                <AlertTriangle size={16} className="text-amber-500" /> Top 10 - Frequência de Quebra
+                            </h3>
+                            <div className="space-y-3">
+                                {data.rankingFreq.map((item, i) => (
+                                    <div key={i} className="flex items-center gap-4 hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                                        <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i < 3 ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</div>
+                                        <div className="flex-1">
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-sm font-bold text-slate-700">{item.name}</span>
+                                                <span className="text-sm font-bold text-amber-600">{item.count}x</span>
+                                            </div>
+                                            <div className="text-xs font-mono text-slate-400">{item.placa}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                                {data.rankingFreq.length === 0 && <p className="text-center text-slate-400 text-sm py-4">Sem registros de manutenção.</p>}
+                            </div>
+                        </div>
+
+                        {/* Ranking Tempo */}
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-700 mb-6 flex items-center gap-2">
+                                <Clock size={16} className="text-red-500" /> Top 10 - Tempo em Manutenção
+                            </h3>
+                            <div className="space-y-3">
+                                {data.rankingTime.map((item, i) => (
+                                    <div key={i} className="flex items-center gap-4 hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                                        <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i < 3 ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>{i + 1}</div>
+                                        <div className="flex-1">
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-sm font-bold text-slate-700">{item.name}</span>
+                                                <span className="text-sm font-bold text-red-600">{formatDuration(item.time)}</span>
+                                            </div>
+                                            <div className="text-xs font-mono text-slate-400">{item.placa}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                                {data.rankingTime.length === 0 && <p className="text-center text-slate-400 text-sm py-4">Sem registros de tempo em manutenção.</p>}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         };
@@ -1573,28 +1720,9 @@
 
         // Analytics Page
         const AnalyticsPage = () => {
-            const [stats, setStats] = useState(null);
-            const [loading, setLoading] = useState(true);
+            const { vagas, loading } = useFleet();
 
-            useEffect(() => {
-                const loadData = async () => {
-                    try {
-                        const res = await api.getDashboardData();
-                        if (res.success && res.data) {
-                            setStats(res.data);
-                        }
-                    } catch (e) {
-                        console.error("Erro ao carregar analytics:", e);
-                    } finally {
-                        setLoading(false);
-                    }
-                };
-                loadData();
-                const interval = setInterval(loadData, 60000); // Atualiza a cada 1 min
-                return () => clearInterval(interval);
-            }, []);
-
-            if (loading && !stats) {
+            if (loading && vagas.length === 0) {
                 return (
                     <div className="flex items-center justify-center h-full">
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
@@ -1602,39 +1730,71 @@
                 );
             }
 
-            // Fallback robusto para evitar crash se API falhar ou backend estiver desatualizado
-            const fallback = {
-                totalVagas: 0,
-                totalWorkingMin: 0,
-                totalStoppedMin: 0,
-                totalMaintMin: 0,
-                totalMin: 1,
-                hourlyActivity: new Array(24).fill(0),
-                dailyTrend: [],
-                ranking: [],
-                statusSnapshot: { trabalhando: 0, parado: 0, manutencao: 0, 'sem-apropriacao': 0 }
-            };
+            // ========== CÁLCULO DE KPIs REAIS A PARTIR DOS DADOS DO FLEET CONTEXT ==========
+            let totalMinFleet = 0, workingMin = 0, stoppedMin = 0, maintMin = 0, idleMin = 0, noDataMin = 0, secondaryMin = 0;
+            const perEquip = [];
+            let apropriados = 0, naoApropriados = 0;
+            const hourlyEvents = new Array(24).fill(0);
+            const statusCounts = { trabalhando: 0, parado: 0, manutencao: 0, semApropriacao: 0 };
 
-            // Merge dos dados recebidos com o fallback (garante que todas as propriedades existam)
-            const data = { ...fallback, ...(stats || {}) };
+            vagas.forEach(v => {
+                let eqWork = 0, eqStopped = 0, eqMaint = 0, eqTotal = 0, eqIdle = 0, eqSecondary = 0;
+                let hasData = false;
 
-            // Retrocompatibilidade: Se vier "statusDistribution" (backend antigo), usa como "statusSnapshot"
-            if (stats && stats.statusDistribution && !stats.statusSnapshot) {
-                data.statusSnapshot = stats.statusDistribution;
-            }
+                if (v.eventos && v.eventos.length > 0) {
+                    v.eventos.forEach(evt => {
+                        const evtStatus = normalizeStatus(evt.status || evt.descricao, v.nome);
+                        const duration = timeToMinutes(evt.tempoTotal);
+                        eqTotal += duration;
 
-            const workingPct = data.totalMin > 0 ? (data.totalWorkingMin / data.totalMin) * 100 : 0;
-            const stoppedPct = data.totalMin > 0 ? (data.totalStoppedMin / data.totalMin) * 100 : 0;
-            const maintPct = data.totalMin > 0 ? (data.totalMaintMin / data.totalMin) * 100 : 0;
+                        // Hourly activity
+                        const startStr = evt.dataInicio || '';
+                        const hourMatch = startStr.match(/(\d{1,2}):\d{2}/);
+                        if (hourMatch) {
+                            const hr = parseInt(hourMatch[1], 10);
+                            if (hr >= 0 && hr < 24) hourlyEvents[hr]++;
+                        }
 
-            // Pie Gradient logic based on data (safe check)
-            const snap = data.statusSnapshot || fallback.statusSnapshot;
-            const totalSnap = Object.values(snap).reduce((a, b) => a + b, 0) || 1;
-            const snapWorkingPct = ((snap.trabalhando || 0) / totalSnap) * 100;
-            const snapStoppedPct = ((snap.parado || 0) / totalSnap) * 100;
-            const snapMaintPct = ((snap.manutencao || 0) / totalSnap) * 100;
+                        if (evtStatus === 'motor ligado') { eqWork += duration; statusCounts.trabalhando++; hasData = true; }
+                        else if (evtStatus === 'motor secundário ligado') { eqWork += duration; eqSecondary += duration; statusCounts.trabalhando++; hasData = true; }
+                        else if (evtStatus === 'em manutenção') { eqMaint += duration; statusCounts.manutencao++; hasData = true; }
+                        else if (evtStatus === 'parado ligado' || evtStatus === 'parado' || evtStatus === 'motor desligado' || evtStatus === 'chave geral desligada' || evtStatus === 'fora da planta') { eqStopped += duration; statusCounts.parado++; hasData = true; }
+                        else if (evtStatus === 'indisponível / sem apropriação' || evtStatus === 'indisponível' || evtStatus === 'sem apropriação') { eqIdle += duration; statusCounts.semApropriacao++; }
+                        else { eqStopped += duration; statusCounts.parado++; hasData = true; }
+                    });
+                }
 
-            const pieGradient = `conic-gradient(#10b981 0% ${snapWorkingPct}%, #ef4444 ${snapWorkingPct}% ${snapWorkingPct + snapStoppedPct}%, #f59e0b ${snapWorkingPct + snapStoppedPct}% ${snapWorkingPct + snapStoppedPct + snapMaintPct}%, #cbd5e1 ${snapWorkingPct + snapStoppedPct + snapMaintPct}% 100%)`;
+                if (hasData) apropriados++; else naoApropriados++;
+
+                totalMinFleet += eqTotal;
+                workingMin += eqWork;
+                stoppedMin += eqStopped;
+                maintMin += eqMaint;
+                idleMin += eqIdle;
+                secondaryMin += eqSecondary;
+
+                const eqEfficiency = eqTotal > 0 ? ((eqWork / eqTotal) * 100).toFixed(1) : 0;
+                perEquip.push({ name: v.nome, placa: v.placa, workMin: eqWork, stoppedMin: eqStopped, maintMin: eqMaint, totalMin: eqTotal, efficiency: parseFloat(eqEfficiency), secondaryMin: eqSecondary });
+            });
+
+            const workingPct = totalMinFleet > 0 ? (workingMin / totalMinFleet) * 100 : 0;
+            const stoppedPct = totalMinFleet > 0 ? (stoppedMin / totalMinFleet) * 100 : 0;
+            const maintPct = totalMinFleet > 0 ? (maintMin / totalMinFleet) * 100 : 0;
+            const idlePct = totalMinFleet > 0 ? (idleMin / totalMinFleet) * 100 : 0;
+
+            // Pie chart
+            const totalSnap = Object.values(statusCounts).reduce((a, b) => a + b, 0) || 1;
+            const snapWork = (statusCounts.trabalhando / totalSnap) * 100;
+            const snapStop = (statusCounts.parado / totalSnap) * 100;
+            const snapMaint = (statusCounts.manutencao / totalSnap) * 100;
+            const pieGradient = `conic-gradient(#10b981 0% ${snapWork}%, #ef4444 ${snapWork}% ${snapWork + snapStop}%, #f59e0b ${snapWork + snapStop}% ${snapWork + snapStop + snapMaint}%, #cbd5e1 ${snapWork + snapStop + snapMaint}% 100%)`;
+
+            // Ranking por eficiência (descendente)
+            const ranking = [...perEquip].filter(e => e.totalMin > 0).sort((a, b) => b.efficiency - a.efficiency).slice(0, 10);
+
+            // Hourly normalize
+            const maxH = Math.max(...hourlyEvents, 1);
+            const hourlyPct = hourlyEvents.map(v => Math.round((v / maxH) * 100));
 
             return (
                 <div className="p-8 h-full overflow-y-auto custom-scrollbar bg-slate-50 animate-fade-in">
@@ -1643,74 +1803,82 @@
                             <BarChart3 size={28} />
                         </div>
                         <div>
-                            <h1 className="text-2xl font-bold text-slate-800">Analytics Real</h1>
-                            <p className="text-slate-500 text-sm">Indicadores de performance baseados no histórico</p>
+                            <h1 className="text-2xl font-bold text-slate-800">Dashboard Operacional</h1>
+                            <p className="text-slate-500 text-sm">KPIs calculados com dados reais da telemetria (lógica por tipo de ativo)</p>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+                    {/* ROW 1: KPIs PRINCIPAIS */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
                         <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Activity size={60} className="text-emerald-500" /></div>
-                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Disponibilidade</span>
+                            <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Produção Real</span>
                             <div className="text-4xl font-bold text-slate-800 mt-2">{workingPct.toFixed(1)}%</div>
-                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
-                                <div className="bg-emerald-500 h-full" style={{ width: `${workingPct}%` }}></div>
-                            </div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden"><div className="bg-emerald-500 h-full" style={{ width: `${workingPct}%` }}></div></div>
+                            <p className="text-[10px] text-slate-400 mt-2">{formatDuration(workingMin)} trabalhadas de {formatDuration(totalMinFleet)} totais</p>
                         </div>
                         <div className="bg-white p-5 rounded-2xl border border-red-100 shadow-sm relative overflow-hidden group">
                             <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><AlertTriangle size={60} className="text-red-500" /></div>
-                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Tempo Parado</span>
+                            <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Motor Desligado / Parado</span>
                             <div className="text-4xl font-bold text-slate-800 mt-2">{stoppedPct.toFixed(1)}%</div>
-                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
-                                <div className="bg-red-500 h-full" style={{ width: `${stoppedPct}%` }}></div>
-                            </div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden"><div className="bg-red-500 h-full" style={{ width: `${stoppedPct}%` }}></div></div>
+                            <p className="text-[10px] text-slate-400 mt-2">{formatDuration(stoppedMin)} paradas</p>
                         </div>
-                        <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm relative overflow-hidden group">
-                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Zap size={60} className="text-indigo-500" /></div>
-                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Eficiência Global</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">{workingPct.toFixed(0)}%</div>
-                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
-                                <div className="bg-indigo-500 h-full" style={{ width: `${workingPct}%` }}></div>
-                            </div>
+                        <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-sm relative overflow-hidden group">
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><AlertOctagon size={60} className="text-amber-500" /></div>
+                            <span className="text-xs font-bold text-amber-600 uppercase tracking-wider">Manutenção</span>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{maintPct.toFixed(1)}%</div>
+                            <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden"><div className="bg-amber-500 h-full" style={{ width: `${maintPct}%` }}></div></div>
+                            <p className="text-[10px] text-slate-400 mt-2">{formatDuration(maintMin)} em manutenção</p>
                         </div>
                         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
-                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Calendar size={60} className="text-slate-400" /></div>
+                            <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:scale-110 transition-transform"><Truck size={60} className="text-slate-400" /></div>
                             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Frota Total</span>
-                            <div className="text-4xl font-bold text-slate-800 mt-2">{data.totalVagas}</div>
-                            <p className="text-xs text-slate-400 mt-2">Veículos Monitorados</p>
+                            <div className="text-4xl font-bold text-slate-800 mt-2">{vagas.length}</div>
+                            <p className="text-[10px] text-slate-400 mt-2"><span className="text-emerald-600 font-bold">{apropriados} apropriados</span> · <span className="text-red-500 font-bold">{naoApropriados} sem dados</span></p>
                         </div>
                     </div>
 
+                    {/* ROW 2: KPIs SECUNDÁRIOS */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
+                        <div className="bg-white p-5 rounded-2xl border border-cyan-100 shadow-sm">
+                            <span className="text-xs font-bold text-cyan-600 uppercase tracking-wider">Motor Secundário Ligado</span>
+                            <div className="text-3xl font-bold text-slate-800 mt-2">{formatDuration(secondaryMin)}</div>
+                            <p className="text-[10px] text-slate-400 mt-1">Tempo total de operação no jato/vácuo (Alta Pressão/Hiper)</p>
+                        </div>
+                        <div className="bg-white p-5 rounded-2xl border border-yellow-100 shadow-sm">
+                            <span className="text-xs font-bold text-yellow-600 uppercase tracking-wider">Parado Ligado (Improdutivo)</span>
+                            <div className="text-3xl font-bold text-slate-800 mt-2">{formatDuration(stoppedMin)}</div>
+                            <p className="text-[10px] text-slate-400 mt-1">Marcha lenta improdutiva (Alta Pressão) + Motor Desligado</p>
+                        </div>
+                        <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sem Apropriação</span>
+                            <div className="text-3xl font-bold text-slate-800 mt-2">{idlePct.toFixed(1)}%</div>
+                            <p className="text-[10px] text-slate-400 mt-1">{formatDuration(idleMin)} indisponíveis / sem sinal</p>
+                        </div>
+                    </div>
+
+                    {/* ROW 3: TIMELINE 24H */}
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
                         <div className="flex justify-between items-center mb-6">
                             <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
-                                <Clock size={20} className="text-blue-600" />
-                                Timeline de Atividade (24h)
+                                <Clock size={20} className="text-blue-600" /> Timeline de Atividade (24h)
                             </h3>
-                            <div className="flex gap-2">
-                                <span className="text-[10px] text-slate-400 uppercase">Volume de eventos iniciados por hora</span>
-                            </div>
+                            <span className="text-[10px] text-slate-400 uppercase">Eventos iniciados por hora</span>
                         </div>
-
-                        <div className="h-64 w-full flex items-end justify-between gap-1 sm:gap-2 px-2 pb-2">
-                            {data.hourlyActivity.map((val, hour) => {
+                        <div className="h-52 w-full flex items-end justify-between gap-1 sm:gap-2 px-2 pb-2">
+                            {hourlyPct.map((val, hour) => {
                                 let barColor = 'bg-slate-300';
                                 if (val > 20) barColor = 'bg-indigo-300';
                                 if (val > 50) barColor = 'bg-indigo-500';
                                 if (val > 80) barColor = 'bg-indigo-600';
-
                                 return (
                                     <div key={hour} className="flex-1 flex flex-col justify-end group cursor-pointer relative h-full">
-                                        <div
-                                            className={`w-full rounded-t-sm sm:rounded-t-md transition-all duration-300 relative flex flex-col justify-end opacity-80 group-hover:opacity-100 ${barColor}`}
-                                            style={{ height: `${val || 5}%`, minHeight: '4px' }}
-                                        ></div>
-                                        <span className="text-[10px] text-slate-400 text-center mt-2 font-mono pt-1">
-                                            {hour}h
-                                        </span>
+                                        <div className={`w-full rounded-t-md transition-all duration-300 opacity-80 group-hover:opacity-100 ${barColor}`} style={{ height: `${val || 4}%`, minHeight: '4px' }}></div>
+                                        <span className="text-[10px] text-slate-400 text-center mt-2 font-mono">{hour}h</span>
                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-20">
                                             <div className="bg-slate-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl whitespace-nowrap">
-                                                <span className="font-bold">{val}% Atividade</span>
+                                                <span className="font-bold">{hourlyEvents[hour]} eventos</span>
                                             </div>
                                             <div className="w-2 h-2 bg-slate-800 rotate-45 mx-auto -mt-1"></div>
                                         </div>
@@ -1720,50 +1888,36 @@
                         </div>
                     </div>
 
+                    {/* ROW 4: PIE + RANKING */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center">
                             <h3 className="text-sm font-bold text-slate-700 mb-6 w-full flex items-center gap-2">
-                                <PieChart size={16} className="text-indigo-500" /> Distribuição Atual
+                                <PieChart size={16} className="text-indigo-500" /> Distribuição de Status
                             </h3>
                             <div className="relative w-56 h-56 rounded-full shadow-inner mb-6 transition-all hover:scale-105 duration-500" style={{ background: pieGradient }}>
                                 <div className="absolute inset-0 m-auto w-32 h-32 bg-white rounded-full flex items-center justify-center shadow-lg">
                                     <div className="text-center">
-                                        <span className="block text-3xl font-bold text-slate-800">{data.totalVagas}</span>
-                                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Veículos</span>
+                                        <span className="block text-3xl font-bold text-slate-800">{vagas.length}</span>
+                                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Vagas</span>
                                     </div>
                                 </div>
                             </div>
-                            <div className="w-full grid grid-cols-2 gap-3">
-                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Operando</span> <span className="font-bold">{Math.round(snapWorkingPct)}%</span></div>
-                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span> Parado</span> <span className="font-bold">{Math.round(snapStoppedPct)}%</span></div>
+                            <div className="w-full grid grid-cols-2 gap-2">
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Produzindo</span> <span className="font-bold">{Math.round(snapWork)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span> Parado</span> <span className="font-bold">{Math.round(snapStop)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-500"></span> Manutenção</span> <span className="font-bold">{Math.round(snapMaint)}%</span></div>
+                                <div className="flex justify-between text-xs items-center p-2 bg-slate-50 rounded-lg"><span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-slate-300"></span> Sem Dados</span> <span className="font-bold">{Math.round(100 - snapWork - snapStop - snapMaint)}%</span></div>
                             </div>
                         </div>
 
                         <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                            <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                                    <History size={16} className="text-blue-500" /> Histórico (7 Dias) & Ranking
-                                </h3>
-                            </div>
-
-                            {/* Daily Trend Mini-Chart */}
-                            <div className="flex items-end gap-2 h-32 mb-8 px-4 border-b border-slate-100 pb-4">
-                                {data.dailyTrend.map((d, i) => (
-                                    <div key={i} className="flex-1 flex flex-col items-center group">
-                                        <div className="w-full bg-blue-100 rounded-t-md relative hover:bg-blue-200 transition-colors" style={{ height: `${d.efficiency}%` }}>
-                                            <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-bold text-blue-600 opacity-0 group-hover:opacity-100">{d.efficiency}%</span>
-                                        </div>
-                                        <span className="text-[10px] text-slate-500 mt-2 font-mono">{d.date}</span>
-                                    </div>
-                                ))}
-                                {data.dailyTrend.length === 0 && <div className="w-full text-center text-slate-400 text-sm py-10">Sem histórico suficiente</div>}
-                            </div>
-
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Top Veículos (Eficiência)</h4>
-                            <div className="space-y-4">
-                                {data.ranking.map((v, i) => (
-                                    <div key={i} className="flex items-center gap-4 group hover:bg-slate-50 p-2 rounded-lg transition-colors">
-                                        <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i === 0 ? 'bg-yellow-100 text-yellow-600' : 'bg-slate-100 text-slate-500'}`}>
+                            <h3 className="text-sm font-bold text-slate-700 mb-6 flex items-center gap-2">
+                                <History size={16} className="text-blue-500" /> Produtividade por Equipamento (Top 10)
+                            </h3>
+                            <div className="space-y-3">
+                                {ranking.map((v, i) => (
+                                    <div key={i} className="flex items-center gap-4 hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                                        <div className={`font-bold text-lg w-8 h-8 flex items-center justify-center rounded-full ${i === 0 ? 'bg-yellow-100 text-yellow-600' : i < 3 ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
                                             {i + 1}
                                         </div>
                                         <div className="flex-1">
@@ -1774,14 +1928,60 @@
                                             <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
                                                 <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${v.efficiency}%` }}></div>
                                             </div>
+                                            <div className="flex gap-3 mt-1 text-[10px] text-slate-400">
+                                                <span>🟢 {formatDuration(v.workMin)}</span>
+                                                <span>🔴 {formatDuration(v.stoppedMin)}</span>
+                                                <span>🟠 {formatDuration(v.maintMin)}</span>
+                                            </div>
                                         </div>
                                         <div className="text-xs font-mono text-slate-400 border border-slate-200 px-2 py-1 rounded bg-white">
                                             {v.placa}
                                         </div>
                                     </div>
                                 ))}
-                                {data.ranking.length === 0 && <div className="text-center text-slate-400 py-4">Sem dados de ranking</div>}
+                                {ranking.length === 0 && <div className="text-center text-slate-400 py-4">Sem dados de ranking</div>}
                             </div>
+                        </div>
+                    </div>
+
+                    {/* ROW 5: TABELA COMPLETA POR EQUIPAMENTO */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-8">
+                        <h3 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                            <Truck size={16} className="text-blue-500" /> Produtividade por Vaga - Todos os Equipamentos
+                        </h3>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-100 text-slate-500 font-semibold">
+                                    <tr>
+                                        <th className="p-3 rounded-l-lg">Equipamento</th>
+                                        <th className="p-3">Placa</th>
+                                        <th className="p-3 text-center">Trabalhando</th>
+                                        <th className="p-3 text-center">Parado</th>
+                                        <th className="p-3 text-center">Manutenção</th>
+                                        <th className="p-3 text-center">Motor 2º</th>
+                                        <th className="p-3 text-center">Total</th>
+                                        <th className="p-3 text-center rounded-r-lg">Eficiência</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {perEquip.sort((a, b) => b.efficiency - a.efficiency).map((eq, i) => (
+                                        <tr key={i} className="hover:bg-slate-50">
+                                            <td className="p-3 font-bold text-slate-700">{eq.name}</td>
+                                            <td className="p-3 font-mono text-slate-400">{eq.placa}</td>
+                                            <td className="p-3 text-center text-emerald-600 font-bold">{formatDuration(eq.workMin)}</td>
+                                            <td className="p-3 text-center text-red-500 font-bold">{formatDuration(eq.stoppedMin)}</td>
+                                            <td className="p-3 text-center text-amber-600 font-bold">{formatDuration(eq.maintMin)}</td>
+                                            <td className="p-3 text-center text-cyan-600 font-bold">{formatDuration(eq.secondaryMin)}</td>
+                                            <td className="p-3 text-center text-slate-600 font-bold">{formatDuration(eq.totalMin)}</td>
+                                            <td className="p-3 text-center">
+                                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${eq.efficiency >= 50 ? 'bg-emerald-100 text-emerald-700' : eq.efficiency >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {eq.efficiency}%
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -2303,6 +2503,7 @@
                             <main className="flex-1 ml-64 h-full overflow-hidden relative flex flex-col">
                                 {currentPage === 'monitoramento' && <MonitoramentoPage />}
                                 {currentPage === 'analytics' && <AnalyticsPage />}
+                                {currentPage === 'manutencao' && <MaintenanceTracker />}
                                 {currentPage === 'alarmes' && <AlarmesPage />}
                                 {currentPage === 'configuracoes' && <ConfiguracoesPage />}
                             </main>
