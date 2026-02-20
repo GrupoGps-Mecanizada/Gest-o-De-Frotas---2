@@ -1047,10 +1047,15 @@
             const [scrollDirection, setScrollDirection] = useState("up");
             const prevOffsetRef = useRef(0);
             const rafRef = useRef(null);
+            const lockRef = useRef(false);
 
             useEffect(() => {
                 const handleScroll = () => {
-                    if (rafRef.current) return; // Throttle via rAF
+                    // No desktop (md: 768px+), a barra é sempre visível — não processar
+                    if (window.innerWidth >= 768) return;
+                    if (lockRef.current) return;
+                    if (rafRef.current) return;
+
                     rafRef.current = requestAnimationFrame(() => {
                         rafRef.current = null;
                         if (!scrollRef.current) return;
@@ -1059,7 +1064,15 @@
                         if (Math.abs(diff) > 30) {
                             const newDir = (diff > 0 && currentOffset > 80) ? "down" : (diff < 0 ? "up" : null);
                             if (newDir) {
-                                setScrollDirection(prev => prev !== newDir ? newDir : prev);
+                                setScrollDirection(prev => {
+                                    if (prev !== newDir) {
+                                        // Lock para evitar oscilação durante transição CSS
+                                        lockRef.current = true;
+                                        setTimeout(() => { lockRef.current = false; }, 400);
+                                        return newDir;
+                                    }
+                                    return prev;
+                                });
                             }
                             prevOffsetRef.current = currentOffset;
                         }
@@ -1819,7 +1832,7 @@
             return (
                 <div className="flex h-full w-full">
                     <div className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/50">
-                        <div className={`flex-shrink-0 z-20 relative transition-all duration-300 ease-in-out overflow-hidden ${scrollDirection === 'down' ? 'max-h-0 opacity-0' : 'max-h-[400px] opacity-100'}`}>
+                        <div className={`flex-shrink-0 z-20 relative transition-all duration-300 ease-in-out overflow-hidden md:max-h-[400px] md:opacity-100 ${scrollDirection === 'down' ? 'max-h-0 opacity-0' : 'max-h-[400px] opacity-100'}`}>
                             <div className="px-4 md:px-6 pt-4 md:pt-6 pb-2">
                                 <div className="mb-4 md:mb-6 flex flex-row justify-between items-center gap-2">
                                     <div className="min-w-0">
