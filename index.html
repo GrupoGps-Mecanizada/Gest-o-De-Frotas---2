@@ -1045,26 +1045,34 @@
 
         const useScrollDirection = (scrollRef) => {
             const [scrollDirection, setScrollDirection] = useState("up");
-            const [prevOffset, setPrevOffset] = useState(0);
+            const prevOffsetRef = useRef(0);
+            const rafRef = useRef(null);
 
             useEffect(() => {
                 const handleScroll = () => {
-                    if (!scrollRef.current) return;
-                    const currentOffset = scrollRef.current.scrollTop;
-                    if (Math.abs(currentOffset - prevOffset) > 10) {
-                        if (currentOffset > prevOffset && currentOffset > 50) {
-                            setScrollDirection("down");
-                        } else if (currentOffset < prevOffset) {
-                            setScrollDirection("up");
+                    if (rafRef.current) return; // Throttle via rAF
+                    rafRef.current = requestAnimationFrame(() => {
+                        rafRef.current = null;
+                        if (!scrollRef.current) return;
+                        const currentOffset = scrollRef.current.scrollTop;
+                        const diff = currentOffset - prevOffsetRef.current;
+                        if (Math.abs(diff) > 30) {
+                            const newDir = (diff > 0 && currentOffset > 80) ? "down" : (diff < 0 ? "up" : null);
+                            if (newDir) {
+                                setScrollDirection(prev => prev !== newDir ? newDir : prev);
+                            }
+                            prevOffsetRef.current = currentOffset;
                         }
-                        setPrevOffset(currentOffset);
-                    }
+                    });
                 };
 
                 const el = scrollRef.current;
-                if (el) el.addEventListener("scroll", handleScroll);
-                return () => { if (el) el.removeEventListener("scroll", handleScroll); };
-            }, [prevOffset, scrollRef]);
+                if (el) el.addEventListener("scroll", handleScroll, { passive: true });
+                return () => {
+                    if (el) el.removeEventListener("scroll", handleScroll);
+                    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+                };
+            }, [scrollRef]);
 
             return scrollDirection;
         };
