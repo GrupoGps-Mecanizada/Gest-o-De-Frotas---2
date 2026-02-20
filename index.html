@@ -851,10 +851,16 @@
             const prevAlertCountRef = useRef(0);
             const { addToast } = useToast();
 
-            const [filters, setFilters] = useState({
-                date: new Date().toISOString().split('T')[0],
-                startTime: '',
-                endTime: ''
+            const [filters, setFilters] = useState(() => {
+                const now = new Date();
+                const y = now.getFullYear();
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const d = String(now.getDate()).padStart(2, '0');
+                return {
+                    date: `${y}-${m}-${d}`,
+                    startTime: '',
+                    endTime: ''
+                };
             });
 
             const fetchAlerts = useCallback(async () => {
@@ -1728,7 +1734,7 @@
                             )}
                         </div>
                     </div>
-                </div >
+                </div>
             );
         };
 
@@ -1845,7 +1851,7 @@
                                     <button onClick={() => { setFilterText(''); updateFilters({ startTime: '', endTime: '' }); }} className="mt-4 text-blue-600 font-bold text-sm hover:underline">Limpar Filtros</button>
                                 </div>
                             ) : (
-                                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 ${selectedEquip ? 'xl:grid-cols-2' : 'xl:grid-cols-4'} gap-5 transition-all pb-20`}>
+                                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 ${selectedEquip ? 'xl:grid-cols-2' : 'xl:grid-cols-4'} gap-5 transition-all pb-6`}>
                                     {filteredVagas.map((vaga) => (
                                         <EquipmentCard
                                             key={vaga.id}
@@ -2780,7 +2786,7 @@
 
         // Mobile Header Component
         const MobileHeader = ({ onOpen }) => (
-            <div className="fixed top-0 left-0 right-0 h-16 bg-[#0f172a] z-30 flex items-center justify-between px-4 md:hidden shadow-md">
+            <div className="h-14 bg-[#0f172a] flex items-center justify-between px-4 md:hidden shadow-md shrink-0">
                 <button onClick={onOpen} className="text-white p-2 hover:bg-slate-800 rounded-lg">
                     <Menu size={24} />
                 </button>
@@ -2790,7 +2796,7 @@
                     </div>
                     <span className="font-bold text-white text-sm">Gestão De Frota</span>
                 </div>
-                <div className="w-10"></div> {/* Spacer for balance */}
+                <div className="w-10"></div>
             </div>
         );
 
@@ -2811,7 +2817,7 @@
                                 onClose={() => setIsMobileMenuOpen(false)}
                             />
 
-                            <main className="flex-1 md:ml-64 h-full overflow-hidden relative flex flex-col mt-16 md:mt-0 transition-all duration-300">
+                            <main className="flex-1 md:ml-64 overflow-hidden relative flex flex-col transition-all duration-300 min-h-0">
                                 {currentPage === 'monitoramento' && <MonitoramentoPage />}
                                 {currentPage === 'analytics' && <AnalyticsPage />}
                                 {currentPage === 'manutencao' && <MaintenanceTracker />}
