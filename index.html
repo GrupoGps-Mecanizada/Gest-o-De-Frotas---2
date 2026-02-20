@@ -1040,6 +1040,47 @@
         const useFleet = () => useContext(FleetContext);
 
         // ============================================
+        // CUSTOM HOOKS
+        // ============================================
+
+        const useScrollDirection = (scrollRef) => {
+            const [scrollDirection, setScrollDirection] = useState("up");
+            const [prevOffset, setPrevOffset] = useState(0);
+
+            useEffect(() => {
+                const handleScroll = () => {
+                    if (!scrollRef.current) return;
+                    const currentOffset = scrollRef.current.scrollTop;
+                    if (Math.abs(currentOffset - prevOffset) > 10) {
+                        if (currentOffset > prevOffset && currentOffset > 50) {
+                            setScrollDirection("down");
+                        } else if (currentOffset < prevOffset) {
+                            setScrollDirection("up");
+                        }
+                        setPrevOffset(currentOffset);
+                    }
+                };
+
+                const el = scrollRef.current;
+                if (el) el.addEventListener("scroll", handleScroll);
+                return () => { if (el) el.removeEventListener("scroll", handleScroll); };
+            }, [prevOffset, scrollRef]);
+
+            return scrollDirection;
+        };
+
+        const useBackHandler = (isActive, onClose) => {
+            useEffect(() => {
+                if (isActive) {
+                    window.history.pushState({ modalOpen: true }, '', '#open');
+                    const handlePopState = () => onClose();
+                    window.addEventListener('popstate', handlePopState);
+                    return () => window.removeEventListener('popstate', handlePopState);
+                }
+            }, [isActive, onClose]);
+        };
+
+        // ============================================
         // COMPONENTS
         // ============================================
 
@@ -1521,6 +1562,10 @@
             const [searchText, setSearchText] = useState('');
             const [selectedEquip, setSelectedEquip] = useState(null);
 
+            useBackHandler(!!selectedEquip, () => setSelectedEquip(null));
+
+
+
             const calculateStats = () => {
                 const stats = { totalTime: 0, totalWorking: 0, totalMaint: 0, rankingFreq: [], rankingTime: [], equipList: [] };
                 const maintMap = {};
@@ -1749,6 +1794,13 @@
             const [filterText, setFilterText] = useState('');
             const [showFilters, setShowFilters] = useState(false);
 
+            // Hooks para UI e Navegação
+            const scrollRef = useRef(null);
+            const scrollDirection = useScrollDirection(scrollRef);
+
+            useBackHandler(!!selectedEquip, () => setSelectedEquip(null));
+            useBackHandler(showFilters, () => setShowFilters(false));
+
             const activeEquipment = selectedEquip ? vagas.find(v => v.id === selectedEquip.id) || selectedEquip : null;
 
             const filteredVagas = vagas.filter(v =>
@@ -1759,90 +1811,86 @@
             return (
                 <div className="flex h-full w-full">
                     <div className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/50">
-                        <div className="flex-shrink-0 px-4 md:px-6 pt-4 md:pt-6 pb-2 z-20 relative">
-                            <div className="mb-4 md:mb-6 flex flex-row justify-between items-center gap-2">
-                                <div className="min-w-0">
-                                    <h1 className="text-lg md:text-2xl font-bold text-slate-800 tracking-tight truncate">Monitoramento</h1>
-                                    <p className="text-slate-500 text-xs md:text-sm mt-0.5 hidden sm:block">Visão geral da operação em tempo real</p>
-                                </div>
-                                <button onClick={() => refreshData()} className="p-2 md:hidden bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm shrink-0" title="Recarregar Dados">
-                                    <RefreshCw size={16} className={`${loading ? 'animate-spin' : ''}`} />
-                                </button>
-                            </div>
-
-                            <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
-                                <div className="flex items-center gap-2">
-                                    <div className="flex-1 relative">
-                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                        <input
-                                            type="text"
-                                            placeholder="Pesquisar Vaga ou Placa..."
-                                            value={filterText}
-                                            onChange={(e) => setFilterText(e.target.value)}
-                                            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                                        />
+                        <div className={`flex-shrink-0 z-20 relative transition-all duration-300 ease-in-out overflow-hidden ${scrollDirection === 'down' ? 'max-h-0 opacity-0' : 'max-h-[400px] opacity-100'}`}>
+                            <div className="px-4 md:px-6 pt-4 md:pt-6 pb-2">
+                                <div className="mb-4 md:mb-6 flex flex-row justify-between items-center gap-2">
+                                    <div className="min-w-0">
+                                        <h1 className="text-lg md:text-2xl font-bold text-slate-800 tracking-tight truncate">Monitoramento</h1>
+                                        <p className="text-slate-500 text-xs md:text-sm mt-0.5 hidden sm:block">Visão geral da operação em tempo real</p>
                                     </div>
-
-                                    {/* Toggle filtros no mobile */}
-                                    <button
-                                        onClick={() => setShowFilters(!showFilters)}
-                                        className={`md:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 ${showFilters ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                                    >
-                                        <Filter size={14} />
-                                        <span>Filtros</span>
-                                        <ChevronDown size={12} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+                                    <button onClick={() => refreshData()} className="p-2 md:hidden bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm shrink-0" title="Recarregar Dados">
+                                        <RefreshCw size={16} className={`${loading ? 'animate-spin' : ''}`} />
                                     </button>
-
-                                    {/* Filtros sempre visíveis no desktop */}
-                                    <div className="hidden md:flex items-center gap-3">
-                                        <div className="h-8 w-[1px] bg-slate-200"></div>
-                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
-                                            <Calendar size={16} className="text-blue-500" />
-                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Data</span>
-                                            <input type="date" value={filters.date} onChange={(e) => updateFilters({ date: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
-                                        </div>
-                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
-                                            <Clock size={16} className="text-emerald-500" />
-                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Início</span>
-                                            <input type="time" value={filters.startTime} onChange={(e) => updateFilters({ startTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
-                                        </div>
-                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
-                                            <Clock size={16} className="text-red-500" />
-                                            <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Fim</span>
-                                            <input type="time" value={filters.endTime} onChange={(e) => updateFilters({ endTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
-                                        </div>
-                                        <button onClick={() => refreshData()} className="p-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm" title="Recarregar Dados">
-                                            <RefreshCw size={18} className={`${loading ? 'animate-spin' : ''}`} />
-                                        </button>
-                                    </div>
                                 </div>
 
-                                {/* Filtros expandíveis no mobile */}
-                                {showFilters && (
-                                    <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-col gap-2 animate-fade-in">
-                                        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
-                                            <Calendar size={16} className="text-blue-500 shrink-0" />
-                                            <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Data</span>
-                                            <input type="date" value={filters.date} onChange={(e) => updateFilters({ date: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+                                <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex-1 flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all">
+                                            <Search className="text-slate-400 shrink-0 mr-2" size={18} />
+                                            <input
+                                                type="text"
+                                                placeholder="Pesquisar Vaga ou Placa..."
+                                                value={filterText}
+                                                onChange={(e) => setFilterText(e.target.value)}
+                                                className="w-full bg-transparent border-none focus:outline-none text-sm py-2 text-slate-700 placeholder:text-slate-400"
+                                            />
                                         </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
-                                                <Clock size={14} className="text-emerald-500 shrink-0" />
-                                                <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Início</span>
-                                                <input type="time" value={filters.startTime} onChange={(e) => updateFilters({ startTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+
+                                        {/* Toggle filtros no mobile */}
+                                        <button
+                                            onClick={() => setShowFilters(!showFilters)}
+                                            className={`md:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 ${showFilters ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                        >
+                                            <Filter size={14} />
+                                            <span>Filtros</span>
+                                            <ChevronDown size={12} className={`transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+                                        </button>
+
+                                        {/* Filtros sempre visíveis no desktop */}
+                                        <div className="hidden md:flex items-center gap-3">
+                                            <div className="h-8 w-[1px] bg-slate-200"></div>
+                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Data</span>
+                                                <input type="date" value={filters.date} onChange={(e) => updateFilters({ date: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
                                             </div>
-                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
-                                                <Clock size={14} className="text-red-500 shrink-0" />
-                                                <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Fim</span>
-                                                <input type="time" value={filters.endTime} onChange={(e) => updateFilters({ endTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Início</span>
+                                                <input type="time" value={filters.startTime} onChange={(e) => updateFilters({ startTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
                                             </div>
+                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white hover:border-blue-300 transition-colors">
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Fim</span>
+                                                <input type="time" value={filters.endTime} onChange={(e) => updateFilters({ endTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer" />
+                                            </div>
+                                            <button onClick={() => refreshData()} className="p-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all active:scale-95 shadow-sm" title="Recarregar Dados">
+                                                <RefreshCw size={18} className={`${loading ? 'animate-spin' : ''}`} />
+                                            </button>
                                         </div>
                                     </div>
-                                )}
+
+                                    {/* Filtros expandíveis no mobile */}
+                                    {showFilters && (
+                                        <div className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-col gap-2 animate-fade-in">
+                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Data</span>
+                                                <input type="date" value={filters.date} onChange={(e) => updateFilters({ date: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+                                                    <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Início</span>
+                                                    <input type="time" value={filters.startTime} onChange={(e) => updateFilters({ startTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+                                                </div>
+                                                <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+                                                    <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Fim</span>
+                                                    <input type="time" value={filters.endTime} onChange={(e) => updateFilters({ endTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-6 pt-4">
+                        <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar px-6 pb-6 pt-4">
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2">
                                     <MonitorPlay size={20} className="text-blue-600" />
