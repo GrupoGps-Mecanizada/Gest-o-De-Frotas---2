@@ -1,0 +1,1029 @@
+// ============================================
+// GESTÃO DE FROTA - GOOGLE APPS SCRIPT
+// Sistema de Telemetria v5.0 - UPSERT Strategy
+// ============================================
+
+/**
+ * CONFIGURAÇÃO E CONSTANTES
+ */
+const CONFIG = {
+  SHEET_NAMES: {
+    BASE: 'Base_GaussFleet',
+    ALERTAS: 'Alertas',
+    REGRAS: 'Regras',
+    DASHBOARD: 'Dashboard',
+    LOG: 'Log'
+  },
+  LOCK_TIMEOUT: 30000,
+  MAX_LOG_ROWS: 1000,
+  // Headers padrão da planilha base
+  BASE_HEADERS: ['Vaga', 'Equipamento', 'Data Início', 'Data Fim', 'Tempo Total', 'Descrição', 'Status']
+};
+
+// ============================================
+// 1. CONTROLADOR (HTTP HANDLERS)
+// ============================================
+
+function doGet(e) {
+  return Controller.handleGet(e);
+}
+
+function doPost(e) {
+  return Controller.handlePost(e);
+}
+
+const Controller = {
+  handleGet: function(e) {
+    const action = e.parameter.action;
+    
+    try {
+      LogService.info('GET_REQUEST', { action: action, params: e.parameter });
+      
+      switch(action) {
+        case 'getVagas': 
+          return this.responseJSON(FleetService.getVagas(e.parameter));
+        case 'getAlerts': 
+          return this.responseJSON(AlertService.getAlerts());
+        case 'getRules': 
+          return this.responseJSON(RuleService.getRules());
+        case 'getDashboardData': 
+          return this.responseJSON(DashboardService.getData());
+        case 'test':
+          return this.responseJSON({ success: true, message: 'API v5.0 Online', timestamp: new Date() });
+        default: 
+          return this.responseError('Ação GET inválida: ' + action);
+      }
+    } catch (error) {
+      LogService.error('GET_ERROR', error);
+      return this.responseError(error.toString());
+    }
+  },
+
+  handlePost: function(e) {
+    const lock = LockService.getScriptLock();
+    
+    if (!lock.tryLock(CONFIG.LOCK_TIMEOUT)) {
+      return this.responseError('Servidor ocupado. Tente novamente.');
+    }
+    
+    try {
+      const data = JSON.parse(e.postData.contents);
+      const action = data.action;
+      
+      LogService.info('POST_REQUEST', { action: action });
+      
+      switch(action) {
+        case 'saveData': 
+          return this.responseJSON(FleetService.saveData(data));
+        case 'saveRule': 
+          return this.responseJSON(RuleService.saveRule(data));
+        case 'deleteRule':
+          return this.responseJSON(RuleService.deleteRule(data));
+        case 'toggleRule':
+          return this.responseJSON(RuleService.toggleRule(data));
+        case 'dismissAlert': 
+          return this.responseJSON(AlertService.dismissAlert(data));
+        default: 
+          return this.responseError('Ação POST inválida: ' + action);
+      }
+    } catch (error) {
+      LogService.error('POST_ERROR', error);
+      return this.responseError(error.toString());
+    } finally {
+      lock.releaseLock();
+    }
+  },
+
+  responseJSON: function(data) {
+    return ContentService
+      .createTextOutput(JSON.stringify(data))
+      .setMimeType(ContentService.MimeType.JSON);
+  },
+
+  responseError: function(message) {
+    return this.responseJSON({ success: false, error: message });
+  }
+};
+
+// ============================================
+// 2. SERVIÇOS (BUSINESS LOGIC)
+// ============================================
+
+const FleetService = {
+  /**
+   * Retorna vagas com eventos para a data/hora solicitada.
+   * Preserva os status originais do GaussFleet (Descrição).
+   */
+  getVagas: function(params) {
+    const date = params.date || Utils.formatDate(new Date());
+    const hour = params.hour || '';
+    
+    const baseSheet = Repository.getSheet(CONFIG.SHEET_NAMES.BASE);
+    if (!baseSheet) throw new Error('Base de dados não encontrada');
+    
+    const data = baseSheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return { success: true, vagas: [], timestamp: new Date().toISOString(), filter: { date, hour } };
+    }
+    
+    const vagasMap = new Map();
+    
+    // Header map para acesso por nome
+    const headers = data[0];
+    const colMap = Utils.mapHeaders(headers);
+    
+    // Pula header
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const vagaNome = row[colMap['Vaga']];
+      if (!vagaNome) continue;
+
+      const dataInicio = row[colMap['Data Início']]; 
+      
+      // Filtros
+      if (!this.matchesDateFilter(dataInicio, date)) continue;
+      if (hour && !Utils.formatDateTime(dataInicio).includes(hour)) continue;
+
+      // Constrói objeto da vaga
+      if (!vagasMap.has(vagaNome)) {
+        vagasMap.set(vagaNome, {
+          id: 'vaga-' + Utils.slugify(vagaNome),
+          nome: vagaNome,
+          placa: row[colMap['Equipamento']] || 'N/I',
+          equipamento: row[colMap['Equipamento']] || 'N/I',
+          status: '',
+          horario: '',
+          eventos: []
+        });
+      }
+      
+      const vagaData = vagasMap.get(vagaNome);
+      const dataFim = row[colMap['Data Fim']];
+      
+      // Usa Descrição como status primário (preserva o status original do GaussFleet)
+      const descricao = row[colMap['Descrição']] || '';
+      const statusCol = row[colMap['Status']] || '';
+      const statusFinal = descricao || statusCol || 'Sem Apropriação';
+      
+      vagaData.eventos.push({
+        dataInicio: Utils.formatDateTime(dataInicio),
+        dataFim: dataFim ? Utils.formatDateTime(dataFim) : null,
+        tempoTotal: Utils.formatTime(row[colMap['Tempo Total']]),
+        descricao: statusFinal,
+        status: statusFinal
+      });
+      
+      // Atualiza placa se vazia e esta row tem placa
+      if (vagaData.placa === 'N/I' && row[colMap['Equipamento']]) {
+        vagaData.placa = row[colMap['Equipamento']];
+        vagaData.equipamento = row[colMap['Equipamento']];
+      }
+      
+      // Atualiza status com base no último evento
+      const ultimo = vagaData.eventos[vagaData.eventos.length - 1];
+      vagaData.status = ultimo.status;
+      vagaData.horario = Utils.formatDateTime(dataFim || dataInicio);
+    }
+    
+    const vagas = Array.from(vagasMap.values());
+    
+    // Processamento de Alertas
+    if (vagas.length > 0) {
+      try {
+        AlertService.processAlerts(vagas);
+      } catch(e) {
+        LogService.error('ALERT_PROCESS_ERROR', e.toString());
+      }
+    }
+    
+    return { 
+      success: true, 
+      vagas: vagas,
+      timestamp: new Date().toISOString(),
+      filter: { date, hour }
+    };
+  },
+
+  /**
+   * Salva dados com estratégia UPSERT.
+   * - mode 'upsert': Remove todos os dados do captureDate e insere os novos (substitui snapshot do dia)
+   * - mode 'append' (ou sem mode): Comportamento tradicional de append
+   */
+  saveData: function(payload) {
+    const rows = payload.rows;
+    if (!rows || !rows.length) return { success: true, message: "Sem dados", saved: 0 };
+
+    const baseSheet = Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.BASE, CONFIG.BASE_HEADERS);
+
+    // Remove header do payload se existir
+    const dataRows = [...rows];
+    if (dataRows[0] && (
+      dataRows[0][0] === 'Vaga' || 
+      dataRows[0][0] === 'vaga' || 
+      dataRows[0][1] === 'Equipamento' ||
+      dataRows[0][1] === 'equipamento'
+    )) {
+      dataRows.shift();
+    }
+
+    if (dataRows.length === 0) return { success: true, saved: 0 };
+
+    // Prepara dados - garante 7 colunas
+    const processedRows = dataRows.map(row => {
+      const newRow = [...row];
+      
+      // Garante timestamp se vazio
+      if (!newRow[2]) newRow[2] = new Date();
+      
+      // Se vier com 6 colunas (sem status explícito), duplica a descrição para status
+      if (newRow.length === 6) {
+        newRow.push(newRow[5]);
+      }
+      
+      // Se vier com menos de 6, preenche
+      while (newRow.length < 7) {
+        newRow.push('');
+      }
+      
+      // Garante que Status (col 6) tem valor - usa Descrição (col 5) como fallback
+      if (!newRow[6] && newRow[5]) {
+        newRow[6] = newRow[5];
+      }
+      
+      return newRow.slice(0, 7); // Garante exatamente 7 colunas
+    });
+
+    const mode = payload.mode || 'append';
+    let removedCount = 0;
+
+    if (mode === 'upsert') {
+      // UPSERT: Remove dados existentes do dia de captura e insere os novos
+      const captureDate = payload.captureDate || this.extractDateFromRows(processedRows);
+      
+      if (captureDate) {
+        removedCount = this.removeDataForDate(baseSheet, captureDate);
+        LogService.info('UPSERT_CLEANUP', { date: captureDate, removed: removedCount });
+      }
+    }
+
+    // Insere os novos dados
+    if (processedRows.length > 0) {
+      baseSheet.getRange(baseSheet.getLastRow() + 1, 1, processedRows.length, 7)
+               .setValues(processedRows);
+    }
+
+    LogService.info('SAVE_DATA', { 
+      mode: mode, 
+      saved: processedRows.length, 
+      removed: removedCount 
+    });
+
+    return { 
+      success: true, 
+      saved: processedRows.length, 
+      removed: removedCount,
+      mode: mode
+    };
+  },
+
+  /**
+   * Extrai a data (dd/MM/yyyy) da primeira linha de dados
+   */
+  extractDateFromRows: function(rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const dateVal = rows[i][2]; // Coluna 'Data Início'
+      if (dateVal) {
+        const dateStr = dateVal.toString();
+        // Tenta extrair dd/MM/yyyy do início da string
+        const match = dateStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+        if (match) return match[1];
+        
+        // Tenta formato Date object
+        try {
+          const d = new Date(dateVal);
+          if (!isNaN(d.getTime())) {
+            return Utils.formatDate(d);
+          }
+        } catch(e) {}
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Remove todas as linhas da planilha base que correspondem à data fornecida.
+   * Retorna o número de linhas removidas.
+   */
+  removeDataForDate: function(sheet, targetDate) {
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return 0; // Apenas header
+    
+    const colMap = Utils.mapHeaders(data[0]);
+    const colIdx = colMap['Data Início'];
+    
+    // Normaliza a data alvo para comparação dd/MM/yyyy
+    const normalizedTarget = targetDate.includes('-') 
+      ? targetDate.split('-').reverse().join('/')
+      : targetDate;
+    
+    // Identifica linhas para manter (header + linhas de outros dias)
+    const rowsToKeep = [data[0]]; // Sempre mantém o header
+    let removedCount = 0;
+    
+    for (let i = 1; i < data.length; i++) {
+      const rowDate = Utils.formatDate(data[i][colIdx]);
+      if (rowDate === normalizedTarget) {
+        removedCount++;
+      } else {
+        rowsToKeep.push(data[i]);
+      }
+    }
+    
+    if (removedCount > 0) {
+      // Limpa toda a planilha e reescreve dados mantidos
+      sheet.clearContents();
+      if (rowsToKeep.length > 0) {
+        sheet.getRange(1, 1, rowsToKeep.length, rowsToKeep[0].length)
+             .setValues(rowsToKeep);
+      }
+    }
+    
+    return removedCount;
+  },
+
+  matchesDateFilter: function(dateValue, filterDate) {
+    if (!filterDate) return true;
+    const dateStr = Utils.formatDate(dateValue); // dd/MM/yyyy
+    // filterDate pode vir como yyyy-MM-dd do input date HTML
+    const filterFormatted = filterDate.includes('-') ? filterDate.split('-').reverse().join('/') : filterDate;
+    return dateStr === filterFormatted;
+  }
+};
+
+const AlertService = {
+  processAlerts: function(vagas) {
+    const regrasSheet = Repository.getSheet(CONFIG.SHEET_NAMES.REGRAS);
+    if (!regrasSheet || regrasSheet.getLastRow() <= 1) return;
+    
+    // 1. Carrega todas as regras ativas
+    const rulesData = regrasSheet.getDataRange().getValues();
+    const headers = rulesData[0];
+    const col = Utils.mapHeaders(headers);
+    const activeRules = [];
+    
+    for (let i = 1; i < rulesData.length; i++) {
+      if (rulesData[i][col['Ativa']] === 'SIM') {
+        activeRules.push({
+          id: rulesData[i][col['ID']],
+          condition: rulesData[i][col['Condição']],
+          timeLimit: rulesData[i][col['Tempo (h)']],
+          severity: rulesData[i][col['Severidade']],
+          name: rulesData[i][col['Nome']]
+        });
+      }
+    }
+
+    if (activeRules.length === 0) return;
+
+    // 2. Carrega alertas existentes ATIVOS para memória
+    const alertasSheet = Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.ALERTAS, 
+      ['ID', 'Data/Hora', 'Vaga', 'Equipamento', 'Tipo', 'Severidade', 'Título', 'Mensagem', 'Status', 'Resolvido Em']);
+    
+    const existingAlertsData = alertasSheet.getDataRange().getValues();
+    const existingAlertKeys = new Set();
+    
+    // Chave única: Vaga + Nome da Regra
+    for (let i = 1; i < existingAlertsData.length; i++) {
+      if (existingAlertsData[i][8] === 'ATIVO') {
+        const key = existingAlertsData[i][2] + '_' + existingAlertsData[i][6];
+        existingAlertKeys.add(key);
+      }
+    }
+
+    const newAlerts = [];
+
+    // 3. Verifica regras
+    vagas.forEach(vaga => {
+      activeRules.forEach(rule => {
+        if (this.shouldTrigger(vaga, rule)) {
+          const key = vaga.nome + '_' + rule.name;
+          
+          if (!existingAlertKeys.has(key)) {
+            newAlerts.push([
+              'ALERT-' + Date.now() + Math.floor(Math.random()*1000),
+              new Date(),
+              vaga.nome,
+              vaga.placa,
+              rule.condition,
+              rule.severity,
+              rule.name,
+              vaga.nome + ' está ' + vaga.status,
+              'ATIVO',
+              ''
+            ]);
+            existingAlertKeys.add(key);
+          }
+        }
+      });
+    });
+
+    // 4. Escrita em lote
+    if (newAlerts.length > 0) {
+      alertasSheet.getRange(alertasSheet.getLastRow() + 1, 1, newAlerts.length, newAlerts[0].length)
+                  .setValues(newAlerts);
+      LogService.info('ALERTS_CREATED', { count: newAlerts.length });
+    }
+  },
+
+  shouldTrigger: function(vaga, rule) {
+    const statusAtual = Utils.normalizeStatus(vaga.status);
+    
+    // Calcula tempo acumulado no status atual
+    let totalMinutes = 0;
+    
+    vaga.eventos.forEach(evt => {
+      if (Utils.normalizeStatus(evt.status || evt.descricao) === statusAtual) {
+        totalMinutes += Utils.parseTimeToMinutes(evt.tempoTotal);
+      }
+    });
+
+    const hours = totalMinutes / 60;
+
+    switch(rule.condition) {
+      case 'parado_mais_que': 
+        return statusAtual === 'parado' && hours >= rule.timeLimit;
+      case 'sem_apropriacao_mais_que': 
+        return statusAtual === 'sem-apropriacao' && hours >= rule.timeLimit;
+      case 'manutencao_mais_que': 
+        return statusAtual === 'manutencao' && hours >= rule.timeLimit;
+      case 'desligado_mais_que':
+        return statusAtual === 'desligado' && hours >= rule.timeLimit;
+      default: 
+        return false;
+    }
+  },
+
+  getAlerts: function() {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.ALERTAS);
+    if (!sheet) return { success: true, alerts: [] };
+    
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, alerts: [] };
+    
+    const alerts = [];
+    const col = Utils.mapHeaders(data[0]);
+    
+    for(let i = 1; i < data.length; i++) {
+      if(data[i][col['Status']] === 'ATIVO') {
+        alerts.push({ 
+          id: data[i][col['ID']],
+          timestamp: data[i][col['Data/Hora']],
+          vaga: data[i][col['Vaga']],
+          equipamento: data[i][col['Equipamento']],
+          tipo: data[i][col['Tipo']],
+          severity: data[i][col['Severidade']],
+          titulo: data[i][col['Título']],
+          message: data[i][col['Mensagem']]
+        });
+      }
+    }
+    return { success: true, alerts: alerts };
+  },
+
+  dismissAlert: function(data) {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.ALERTAS);
+    if (!sheet) return { success: false, error: 'Planilha de alertas não encontrada' };
+    
+    const range = sheet.getDataRange();
+    const values = range.getValues();
+    const col = Utils.mapHeaders(values[0]);
+    
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][col['ID']] === data.alertId) {
+        sheet.getRange(i + 1, col['Status'] + 1).setValue('RESOLVIDO');
+        sheet.getRange(i + 1, col['Resolvido Em'] + 1).setValue(new Date());
+        return { success: true };
+      }
+    }
+    return { success: false, error: 'Alerta não encontrado' };
+  }
+};
+
+const RuleService = {
+  getRules: function() {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.REGRAS);
+    if (!sheet) return { success: true, rules: [] };
+    
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, rules: [] };
+    
+    const rules = [];
+    
+    for (let i = 1; i < data.length; i++) {
+      rules.push({
+        id: data[i][0],
+        name: data[i][1],
+        condition: data[i][2],
+        timeLimit: data[i][3],
+        severity: data[i][4],
+        active: data[i][5] === 'SIM'
+      });
+    }
+    return { success: true, rules: rules };
+  },
+
+  saveRule: function(data) {
+    const sheet = Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.REGRAS, 
+      ['ID', 'Nome', 'Condição', 'Tempo (h)', 'Severidade', 'Ativa', 'Criada', 'Modificada']);
+    
+    const ruleId = 'RULE-' + Date.now();
+    sheet.appendRow([
+      ruleId,
+      data.name || 'Nova Regra',
+      data.condition || 'parado_mais_que',
+      data.timeLimit || 2,
+      data.severity || 'warning',
+      'SIM',
+      new Date(),
+      new Date()
+    ]);
+    return { success: true, ruleId: ruleId };
+  },
+
+  deleteRule: function(data) {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.REGRAS);
+    if (!sheet) return { success: false, error: 'Planilha não encontrada' };
+    
+    const values = sheet.getDataRange().getValues();
+    // Assuming ID is in column 0 (index 0)
+    for (let i = 1; i < values.length; i++) {
+        if (values[i][0] === data.ruleId) {
+            sheet.deleteRow(i + 1);
+            return { success: true };
+        }
+    }
+    return { success: false, error: 'Regra não encontrada' };
+  },
+
+  toggleRule: function(data) {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.REGRAS);
+    if (!sheet) return { success: false, error: 'Planilha não encontrada' };
+    
+    const values = sheet.getDataRange().getValues();
+    // Assuming ID is in column 0, Active is in column 5
+    for (let i = 1; i < values.length; i++) {
+        if (values[i][0] === data.ruleId) {
+            const newStatus = data.active ? 'SIM' : 'NÃO';
+            // Column 6 (index 5) is Active
+            sheet.getRange(i + 1, 6).setValue(newStatus); 
+            sheet.getRange(i + 1, 8).setValue(new Date()); // Modified At
+            return { success: true };
+        }
+    }
+    return { success: false, error: 'Regra não encontrada' };
+  }
+
+};
+
+const DataProcessor = {
+  /**
+   * Processa dados brutos da planilha: agrupa por vaga, ordena e consolida eventos adjacentes.
+   */
+  process: function(sheetData, colMap) {
+    // 1. Agrupamento por Vaga
+    const grouped = {};
+    for (let i = 1; i < sheetData.length; i++) {
+      const row = sheetData[i];
+      const vaga = row[colMap['Vaga']];
+      if (!vaga) continue;
+      
+      if (!grouped[vaga]) grouped[vaga] = [];
+      
+      const start = row[colMap['Data Início']] ? new Date(row[colMap['Data Início']]) : null;
+      const end = row[colMap['Data Fim']] ? new Date(row[colMap['Data Fim']]) : new Date();
+      const descricao = row[colMap['Descrição']] || '';
+      const statusCol = row[colMap['Status']] || '';
+      const status = Utils.normalizeStatus(descricao || statusCol);
+      const placa = row[colMap['Equipamento']];
+      
+      if (start) {
+        grouped[vaga].push({
+          vaga, placa, start, end, status,
+          originalStatus: descricao || statusCol,
+          originalDuration: (end - start) / (1000 * 60)
+        });
+      }
+    }
+
+    // 2. Ordenação e Consolidação
+    const consolidatedMap = new Map();
+
+    Object.keys(grouped).forEach(vaga => {
+      const events = grouped[vaga];
+      
+      // A. Ordenar por Data Crescente
+      events.sort((a, b) => a.start - b.start);
+
+      // B. Consolidar Eventos Adjacentes com mesmo status
+      const consolidated = [];
+      if (events.length > 0) {
+        let current = events[0];
+
+        for (let i = 1; i < events.length; i++) {
+          const next = events[i];
+          const gapMinutes = (next.start - current.end) / (1000 * 60);
+
+          // Merge: Mesmo Status E (Sobreposto OU Gap < 5min)
+          if (current.status === next.status && gapMinutes < 5) {
+            if (next.end > current.end) {
+              current.end = next.end;
+            }
+          } else {
+            current.duration = (current.end - current.start) / (1000 * 60);
+            consolidated.push(current);
+            current = next;
+          }
+        }
+        current.duration = (current.end - current.start) / (1000 * 60);
+        consolidated.push(current);
+      }
+      
+      consolidatedMap.set(vaga, consolidated);
+    });
+
+    return consolidatedMap;
+  }
+};
+
+const DashboardService = {
+  getData: function() {
+    const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.BASE);
+    if (!sheet) return { success: false, error: 'Base vazia' };
+    
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: false, error: 'Sem dados' };
+    
+    const col = Utils.mapHeaders(data[0]);
+    
+    // Processamento Inteligente (Ordena e Consolida)
+    const vehicleEventsMap = DataProcessor.process(data, col);
+    
+    // Inicializa KPIs
+    const today = new Date();
+    const stats = {
+      totalVagas: 0,
+      totalWorkingMin: 0,
+      totalStoppedMin: 0,
+      totalMaintMin: 0,
+      totalMin: 0,
+      hourlyActivity: new Array(24).fill(0),
+      dailyTrend: [],
+      ranking: [],
+      statusSnapshot: { trabalhando: 0, parado: 0, manutencao: 0, 'sem-apropriacao': 0, desligado: 0 }
+    };
+    
+    const dailyMap = new Map();
+    const rankingMap = [];
+
+    vehicleEventsMap.forEach((events, vagaName) => {
+      let vWorking = 0;
+      let vTotal = 0;
+      let lastEvent = null;
+
+      events.forEach(evt => {
+        const duration = Math.max(0, evt.duration || 0);
+        stats.totalMin += duration;
+        vTotal += duration;
+
+        // Agregação Global por status normalizado
+        if (evt.status === 'trabalhando') {
+          stats.totalWorkingMin += duration;
+          vWorking += duration;
+        } else if (evt.status === 'parado') {
+          stats.totalStoppedMin += duration;
+        } else if (evt.status === 'manutencao') {
+          stats.totalMaintMin += duration;
+        }
+
+        // Agregação Diária
+        const dateStr = Utils.formatDate(evt.start).substring(0, 5);
+        if (!dailyMap.has(dateStr)) dailyMap.set(dateStr, { working: 0, total: 0, dateFull: evt.start });
+        const dayStat = dailyMap.get(dateStr);
+        dayStat.total += duration;
+        if (evt.status === 'trabalhando') dayStat.working += duration;
+
+        // Atividade Horária (Apenas Hoje)
+        if (Utils.formatDate(evt.start) === Utils.formatDate(today)) {
+          const hour = evt.start.getHours();
+          if (evt.status === 'trabalhando') {
+            stats.hourlyActivity[hour] += duration; 
+          }
+        }
+
+        lastEvent = evt;
+      });
+
+      // Snapshot do Status Atual
+      if (lastEvent) {
+        const finalStatus = lastEvent.status;
+        if (stats.statusSnapshot.hasOwnProperty(finalStatus)) {
+          stats.statusSnapshot[finalStatus]++;
+        } else {
+          stats.statusSnapshot['sem-apropriacao']++;
+        }
+        
+        rankingMap.push({
+          name: vagaName,
+          placa: lastEvent.placa,
+          efficiency: vTotal > 0 ? Math.round((vWorking / vTotal) * 100) : 0,
+          status: finalStatus,
+          totalMinutes: vTotal
+        });
+      }
+    });
+
+    stats.totalVagas = vehicleEventsMap.size;
+
+    // Tendência Diária (Ordenada por Data, últimos 7 dias)
+    const trendArray = Array.from(dailyMap.values())
+      .sort((a, b) => a.dateFull - b.dateFull)
+      .slice(-7)
+      .map(d => ({
+        date: Utils.formatDate(d.dateFull).substring(0, 5),
+        efficiency: d.total > 0 ? Math.round((d.working / d.total) * 100) : 0
+      }));
+    stats.dailyTrend = trendArray;
+
+    // Ranking Top 5
+    stats.ranking = rankingMap
+      .sort((a, b) => b.efficiency - a.efficiency)
+      .slice(0, 5);
+
+    // Normaliza Atividade Horária (0-100%)
+    const maxHour = Math.max(...stats.hourlyActivity) || 1;
+    stats.hourlyActivity = stats.hourlyActivity.map(val => Math.round((val / maxHour) * 100));
+
+    // Persistência e Retorno
+    this.updateDashboardSheet(stats);
+    return { success: true, data: stats };
+  },
+
+  updateDashboardSheet: function(stats) {
+    const sheet = Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.DASHBOARD, ['Métrica', 'Valor', 'Atualização']);
+    
+    const totalVagas = stats.totalVagas || 0;
+    const working = stats.totalWorkingMin || 0;
+    const total = stats.totalMin || 1;
+    const ranking = stats.ranking || [];
+
+    const metrics = [
+      ['Total Vagas', totalVagas, new Date()],
+      ['Eficiência Global', (working / total * 100).toFixed(1) + '%', new Date()],
+      ['Ranking #1', ranking.length > 0 ? ranking[0].name : '-', new Date()]
+    ];
+    if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow(), 3).clearContent();
+    sheet.getRange(2, 1, metrics.length, 3).setValues(metrics);
+  }
+};
+
+// ============================================
+// 3. REPOSITÓRIO (DATA ACCESS)
+// ============================================
+
+const Repository = {
+  getSpreadsheet: function() {
+    return SpreadsheetApp.getActiveSpreadsheet();
+  },
+
+  getSheet: function(name) {
+    return this.getSpreadsheet().getSheetByName(name);
+  },
+
+  getOrCreateSheet: function(name, headers) {
+    let sheet = this.getSheet(name);
+    if (!sheet) {
+      sheet = this.getSpreadsheet().insertSheet(name);
+      if (headers) {
+        sheet.appendRow(headers);
+        sheet.setFrozenRows(1);
+        sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1e40af').setFontColor('white');
+      }
+    }
+    return sheet;
+  }
+};
+
+// ============================================
+// 4. UTILITÁRIOS E LOGS
+// ============================================
+
+const Utils = {
+  /**
+   * Normaliza status do GaussFleet para categorias do Dashboard.
+   * O frontend usa os status originais; o Dashboard agrupa em categorias.
+   */
+  normalizeStatus: function(text) {
+    if (!text) return 'sem-apropriacao';
+    const t = text.toString().toLowerCase().trim();
+    
+    // Trabalhando (Motor Ligado, Motor Secundário, Operação)
+    if (t.includes('motor ligado') || t.includes('motor secundário') || t.includes('trabalhando') || t.includes('operando') || t.includes('operação')) return 'trabalhando';
+    
+    // Parado (Motor Desligado, Parado, Chave Geral Desligada)
+    if (t.includes('motor desligado') || t.includes('chave geral desligada')) return 'desligado';
+    if (t.includes('parado ligado') || t.includes('parado') || t.includes('ocioso')) return 'parado';
+    
+    // Manutenção
+    if (t.includes('manutenção') || t.includes('manutencao')) return 'manutencao';
+    
+    // Sem Apropriação / Indisponível
+    if (t.includes('indisponível') || t.includes('sem apropriação') || t.includes('sem dados')) return 'sem-apropriacao';
+    
+    // Categorias especiais mapeadas para as mais próximas
+    if (t.includes('fora da planta')) return 'parado';
+    if (t.includes('fora do regime') || t.includes('vaga disponível') || t.includes('vaga disponivel')) return 'sem-apropriacao';
+    if (t.includes('troca de turno')) return 'parado';
+    if (t.includes('refeição') || t.includes('refeicao')) return 'parado';
+    if (t.includes('documentação') || t.includes('documentacao')) return 'parado';
+    if (t.includes('abastecimento')) return 'trabalhando';
+    if (t.includes('parada apontada')) return 'parado';
+    
+    return 'sem-apropriacao';
+  },
+
+  normalizeStatusForComparison: function(text) {
+      if (!text) return '';
+      return text.toString().toLowerCase().trim()
+          .replace(/[áàãâä]/g, 'a')
+          .replace(/[éèêë]/g, 'e')
+          .replace(/[íìîï]/g, 'i')
+          .replace(/[óòõôö]/g, 'o')
+          .replace(/[úùûü]/g, 'u')
+          .replace(/[ç]/g, 'c');
+  },
+
+  parseTimeToMinutes: function(timeStr) {
+    if (!timeStr) return 0;
+    const str = timeStr.toString();
+    const parts = str.split(':');
+    if(parts.length < 2) return 0;
+    return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+  },
+
+  formatDate: function(date) {
+    if (!date) return '';
+    try {
+      return Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), 'dd/MM/yyyy');
+    } catch(e) {
+      return '';
+    }
+  },
+
+  formatDateTime: function(date) {
+    if (!date) return '';
+    try {
+      return Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), 'HH:mm dd/MM/yyyy');
+    } catch(e) {
+      return '';
+    }
+  },
+
+  slugify: function(text) {
+    return text.toString().toLowerCase().trim().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '');
+  },
+
+  mapHeaders: function(headerRow) {
+    const map = {};
+    headerRow.forEach((col, index) => {
+      map[col] = index;
+    });
+    return map;
+  },
+
+  formatTime: function(value) {
+    if (!value) return '00:00';
+    if (typeof value === 'string') {
+      return value.substring(0, 5);
+    }
+    try {
+      return Utilities.formatDate(new Date(value), Session.getScriptTimeZone(), 'HH:mm');
+    } catch(e) {
+      return '00:00';
+    }
+  }
+};
+
+const LogService = {
+  info: function(action, details) { this.log(action, details, 'INFO'); },
+  error: function(action, details) { this.log(action, details, 'ERROR'); },
+  
+  log: function(action, details, type) {
+    try {
+      const sheet = Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.LOG, ['Data', 'Ação', 'Detalhes', 'Status', 'User']);
+      const detailsStr = typeof details === 'object' ? JSON.stringify(details) : details;
+      
+      sheet.appendRow([new Date(), action, detailsStr, type, Session.getActiveUser().getEmail()]);
+      
+      if (sheet.getLastRow() > CONFIG.MAX_LOG_ROWS) {
+         sheet.getRange(2, 1, 100, sheet.getLastColumn()).deleteCells(SpreadsheetApp.Dimension.ROWS);
+      }
+    } catch(e) { 
+      Logger.log('Erro Log: ' + e); 
+    }
+  }
+};
+
+// ============================================
+// 5. FUNÇÕES DE SETUP (MENU)
+// ============================================
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('🚀 Gestão de Frota')
+    .addItem('🛠️ Instalar/Restaurar Abas', 'setupSheets')
+    .addSeparator()
+    .addItem('📊 Ver URL da API', 'showApiUrl')
+    .addItem('🧹 Limpar Duplicatas do Dia', 'cleanupToday')
+    .addToUi();
+}
+
+function showApiUrl() {
+  const url = ScriptApp.getService().getUrl();
+  SpreadsheetApp.getUi().alert('URL da API', url, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+/**
+ * Limpa duplicatas para a data de hoje (útil para limpeza manual)
+ */
+function cleanupToday() {
+  const today = Utils.formatDate(new Date());
+  const sheet = Repository.getSheet(CONFIG.SHEET_NAMES.BASE);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('Planilha base não encontrada.');
+    return;
+  }
+  
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) {
+    SpreadsheetApp.getUi().alert('Sem dados para limpar.');
+    return;
+  }
+  
+  const colMap = Utils.mapHeaders(data[0]);
+  const colIdx = colMap['Data Início'];
+  
+  // Agrupa por chave única: Vaga + Data Início + Data Fim + Descrição
+  const seen = new Set();
+  const rowsToKeep = [data[0]]; // Header
+  let dupsRemoved = 0;
+  
+  for (let i = 1; i < data.length; i++) {
+    const rowDate = Utils.formatDate(data[i][colIdx]);
+    
+    // Para linhas do dia de hoje, verifica duplicatas
+    if (rowDate === today) {
+      const key = [
+        data[i][colMap['Vaga']], 
+        data[i][colMap['Data Início']], 
+        data[i][colMap['Data Fim']], 
+        data[i][colMap['Descrição']]
+      ].join('|');
+      
+      if (seen.has(key)) {
+        dupsRemoved++;
+        continue;
+      }
+      seen.add(key);
+    }
+    
+    rowsToKeep.push(data[i]);
+  }
+  
+  if (dupsRemoved > 0) {
+    sheet.clearContents();
+    sheet.getRange(1, 1, rowsToKeep.length, rowsToKeep[0].length).setValues(rowsToKeep);
+  }
+  
+  SpreadsheetApp.getUi().alert(
+    'Limpeza Concluída', 
+    'Duplicatas removidas: ' + dupsRemoved + '\nLinhas mantidas: ' + (rowsToKeep.length - 1),
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function setupSheets() {
+  // Inicializa estrutura
+  Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.BASE, CONFIG.BASE_HEADERS);
+  
+  // Cria abas auxiliares se necessário
+  Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.ALERTAS, 
+    ['ID', 'Data/Hora', 'Vaga', 'Equipamento', 'Tipo', 'Severidade', 'Título', 'Mensagem', 'Status', 'Resolvido Em']);
+  Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.REGRAS, 
+    ['ID', 'Nome', 'Condição', 'Tempo (h)', 'Severidade', 'Ativa', 'Criada', 'Modificada']);
+  Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.DASHBOARD, 
+    ['Métrica', 'Valor', 'Atualização']);
+  Repository.getOrCreateSheet(CONFIG.SHEET_NAMES.LOG, 
+    ['Data', 'Ação', 'Detalhes', 'Status', 'User']);
+  
+  SpreadsheetApp.getUi().alert('Sistema v5.0 Configurado!');
+}
