@@ -438,18 +438,19 @@
             'parado ligado': { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-500', icon: 'bg-yellow-400' },
             'parado': { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-500', icon: 'bg-yellow-400' },
             'em manutenção': { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-500', icon: 'bg-orange-500' },
-            'fora da planta': { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-600', icon: 'bg-amber-700' },
-            'indisponível / sem apropriação': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
-            'indisponível': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
-            'sem apropriação': { bg: 'bg-gray-100', text: 'text-gray-600', border: 'border-gray-400', icon: 'bg-gray-400' },
+            'fora da planta': { bg: 'bg-emerald-50', text: 'text-emerald-800', border: 'border-emerald-600', icon: 'bg-emerald-700' },
+            'indisponível / sem apropriação': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' },
+            'indisponível': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' },
+            'sem apropriação': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' },
             'troca de turno': { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-500', icon: 'bg-blue-500' },
             'fora do regime': { bg: 'bg-white', text: 'text-slate-600', border: 'border-slate-300', icon: 'bg-slate-100' },
             'sem dados de bordo': { bg: 'bg-slate-200', text: 'text-slate-800', border: 'border-slate-600', icon: 'bg-slate-900' },
             'parada apontada': { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-500', icon: 'bg-indigo-900' },
             'vaga disponível': { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-500', icon: 'bg-purple-600' },
-            'chave geral desligada': { bg: 'bg-teal-100', text: 'text-teal-700', border: 'border-teal-500', icon: 'bg-teal-600' },
+            'chave geral desligada': { bg: 'bg-stone-100', text: 'text-stone-700', border: 'border-stone-500', icon: 'bg-stone-600' },
             'documentação': { bg: 'bg-cyan-100', text: 'text-cyan-700', border: 'border-cyan-500', icon: 'bg-cyan-600' },
-            'abastecimento': { bg: 'bg-lime-100', text: 'text-lime-700', border: 'border-lime-500', icon: 'bg-lime-600' },
+            'abastecimento': { bg: 'bg-sky-100', text: 'text-sky-700', border: 'border-sky-500', icon: 'bg-sky-600' },
+            'abastecimento (água) - lm': { bg: 'bg-sky-100', text: 'text-sky-700', border: 'border-sky-500', icon: 'bg-sky-600' },
             'refeição motorista': { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-500', icon: 'bg-rose-500' },
             'refeição': { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-500', icon: 'bg-rose-500' },
             'default': { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-400', icon: 'bg-slate-400' }
@@ -1813,6 +1814,7 @@
             const { vagas, loading, refreshData, filters, updateFilters } = useFleet();
             const [selectedEquip, setSelectedEquip] = useState(null);
             const [filterText, setFilterText] = useState('');
+            const [selectedStatus, setSelectedStatus] = useState('all');
             const [showFilters, setShowFilters] = useState(false);
 
             // Hooks para UI e Navegação
@@ -1824,10 +1826,26 @@
 
             const activeEquipment = selectedEquip ? vagas.find(v => v.id === selectedEquip.id) || selectedEquip : null;
 
-            const filteredVagas = vagas.filter(v =>
-                v.nome.toLowerCase().includes(filterText.toLowerCase()) ||
-                v.placa.toLowerCase().includes(filterText.toLowerCase())
-            );
+            // Extrair status únicos presentes nos dados para o filtro dinâmico
+            const uniqueStatuses = React.useMemo(() => {
+                const statuses = new Set();
+                vagas.forEach(v => {
+                    if (v.status) statuses.add(v.status);
+                });
+                return Array.from(statuses).sort();
+            }, [vagas]);
+
+            const filteredVagas = vagas.filter(v => {
+                const matchesText = v.nome.toLowerCase().includes(filterText.toLowerCase()) ||
+                    v.placa.toLowerCase().includes(filterText.toLowerCase());
+
+                if (selectedStatus === 'all') return matchesText;
+
+                // Combinação de filtro: se o status selecionado for um status real (cru) ou se for um status normalizado
+                const matchesStatus = (v.status === selectedStatus) || (normalizeStatus(v.status, v.nome) === selectedStatus);
+
+                return matchesText && matchesStatus;
+            });
 
             return (
                 <div className="flex h-full w-full">
@@ -1855,6 +1873,28 @@
                                                 onChange={(e) => setFilterText(e.target.value)}
                                                 className="w-full bg-transparent border-none focus:outline-none text-sm py-2 text-slate-700 placeholder:text-slate-400"
                                             />
+                                        </div>
+
+                                        <div className="hidden md:flex items-center gap-2 border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 hover:border-blue-300 transition-colors">
+                                            <span className="text-[10px] uppercase font-bold text-slate-400 ml-1">Status Real</span>
+                                            <select
+                                                value={selectedStatus}
+                                                onChange={(e) => setSelectedStatus(e.target.value)}
+                                                className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer py-1"
+                                            >
+                                                <option value="all">Todos os Status</option>
+                                                <optgroup label="Status da Telemetria">
+                                                    {uniqueStatuses.map((s, i) => (
+                                                        <option key={i} value={s}>{s}</option>
+                                                    ))}
+                                                </optgroup>
+                                                <optgroup label="Categorias">
+                                                    <option value="motor ligado">Trabalhando</option>
+                                                    <option value="parado">Parado</option>
+                                                    <option value="em manutenção">Em Manutenção</option>
+                                                    <option value="indisponível / sem apropriação">Sem Apropriação</option>
+                                                </optgroup>
+                                            </select>
                                         </div>
 
                                         {/* Toggle filtros no mobile */}
@@ -1904,6 +1944,27 @@
                                                     <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Fim</span>
                                                     <input type="time" value={filters.endTime} onChange={(e) => updateFilters({ endTime: e.target.value })} className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0" />
                                                 </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+                                                <span className="text-[10px] uppercase font-bold text-slate-400 shrink-0">Status Real</span>
+                                                <select
+                                                    value={selectedStatus}
+                                                    onChange={(e) => setSelectedStatus(e.target.value)}
+                                                    className="bg-transparent text-sm outline-none text-slate-700 font-medium cursor-pointer flex-1 min-w-0"
+                                                >
+                                                    <option value="all">Todos os Status</option>
+                                                    <optgroup label="Telemetria">
+                                                        {uniqueStatuses.map((s, i) => (
+                                                            <option key={i} value={s}>{s}</option>
+                                                        ))}
+                                                    </optgroup>
+                                                    <optgroup label="Categorias">
+                                                        <option value="motor ligado">Trabalhando</option>
+                                                        <option value="parado">Parado</option>
+                                                        <option value="em manutenção">Em Manutenção</option>
+                                                        <option value="indisponível / sem apropriação">Sem Apropriação</option>
+                                                    </optgroup>
+                                                </select>
                                             </div>
                                         </div>
                                     )}
@@ -2000,7 +2061,7 @@
                         if (evtStatus === 'motor ligado') { eqWork += duration; statusCounts.trabalhando++; hasData = true; }
                         else if (evtStatus === 'motor secundário ligado') { eqWork += duration; eqSecondary += duration; statusCounts.trabalhando++; hasData = true; }
                         else if (evtStatus === 'em manutenção') { eqMaint += duration; statusCounts.manutencao++; hasData = true; }
-                        else if (evtStatus === 'parado ligado' || evtStatus === 'parado' || evtStatus === 'motor desligado' || evtStatus === 'chave geral desligada' || evtStatus === 'fora da planta') { eqStopped += duration; statusCounts.parado++; hasData = true; }
+                        else if (evtStatus === 'parado ligado' || evtStatus === 'parado' || evtStatus === 'motor desligado' || evtStatus === 'chave geral desligada' || evtStatus === 'fora da planta' || evtStatus === 'documentação' || evtStatus === 'abastecimento' || evtStatus === 'abastecimento (água) - lm' || evtStatus === 'refeição') { eqStopped += duration; statusCounts.parado++; hasData = true; }
                         else if (evtStatus === 'indisponível / sem apropriação' || evtStatus === 'indisponível' || evtStatus === 'sem apropriação') { eqIdle += duration; statusCounts.semApropriacao++; }
                         else { eqStopped += duration; statusCounts.parado++; hasData = true; }
                     });
